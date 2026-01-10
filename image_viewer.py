@@ -201,6 +201,28 @@ class ImageViewer(QDialog):
         self._setup_ui()
         self._load_current_image()
 
+    def load_images(self, image_paths: list[str]) -> None:
+        """Load a list of images for navigation.
+
+        Args:
+            image_paths: List of image file paths.
+        """
+        self.image_paths = image_paths or []
+        if self.current_index >= len(self.image_paths):
+            self.current_index = max(0, len(self.image_paths) - 1)
+        self._update_counter()
+
+    def show_image(self, index: int) -> None:
+        """Show image at given index.
+
+        Args:
+            index: Index of image to display.
+        """
+        if 0 <= index < len(self.image_paths):
+            self.current_index = index
+            self._load_current_image()
+            self._clear_roi()
+
     def _setup_ui(self) -> None:
         """Set up the user interface."""
         self.setWindowTitle("Image Viewer")
