@@ -4,3 +4,4 @@ python-dotenv==1.2.1
 pydantic==2.10.6
 PyMuPDF==1.25.5
 Pillow==11.2.1
+tiktoken==0.12.0

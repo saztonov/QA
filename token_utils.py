@@ -7,6 +7,34 @@ with support for mixed Russian/English text and smart truncation.
 import re
 from typing import Optional
 
+import tiktoken
+
+# Initialize tiktoken encoder (cl100k_base is used by GPT-4 and similar models)
+_encoder: Optional[tiktoken.Encoding] = None
+
+
+def _get_encoder() -> tiktoken.Encoding:
+    """Get or create tiktoken encoder (singleton)."""
+    global _encoder
+    if _encoder is None:
+        _encoder = tiktoken.get_encoding("cl100k_base")
+    return _encoder
+
+
+def count_tokens(text: str) -> int:
+    """Count tokens using tiktoken.
+
+    Args:
+        text: Input text to count tokens for.
+
+    Returns:
+        Exact token count.
+    """
+    if not text:
+        return 0
+    encoder = _get_encoder()
+    return len(encoder.encode(text))
+
 
 # Token estimation constants based on empirical testing
 # Russian text: ~2.0-2.5 chars per token (Cyrillic characters are more token-dense)

@@ -19,6 +19,7 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QFont
 
 from image_viewer import ImageViewer
+from token_utils import count_tokens
 
 
 class ImageThumbnail(QLabel):
@@ -64,7 +65,7 @@ class MessageBubble(QFrame):
 
     thumbnail_clicked = Signal(str)  # Emits image path when any thumbnail is clicked
 
-    def __init__(self, text: str, is_user: bool, images: Optional[list[str]] = None):
+    def __init__(self, text: str, is_user: bool, images: Optional[list[str]] = None, token_count: int = 0):
         super().__init__()
         self.is_user = is_user
 
@@ -94,6 +95,19 @@ class MessageBubble(QFrame):
             QSizePolicy.Policy.Minimum
         )
         layout.addWidget(text_label)
+
+        # Token count label
+        if token_count > 0:
+            token_label = QLabel(f"[{token_count:,} токенов]")
+            token_label.setStyleSheet("""
+                QLabel {
+                    color: #888;
+                    font-size: 10px;
+                    font-style: italic;
+                }
+            """)
+            token_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(token_label)
 
         # Styling - dark theme
         if is_user:
@@ -130,6 +144,8 @@ class ChatWidget(QWidget):
         super().__init__()
         self._all_images: list[str] = []  # Track all images for navigation
         self._image_viewer: Optional[ImageViewer] = None
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -183,6 +199,30 @@ class ChatWidget(QWidget):
 
         self.scroll_area.setWidget(self.messages_container)
         layout.addWidget(self.scroll_area, 1)
+
+        # Token stats panel
+        self.token_stats_frame = QFrame()
+        self.token_stats_frame.setStyleSheet("""
+            QFrame {
+                background-color: #252526;
+                border-top: 1px solid #3c3c3c;
+                padding: 4px;
+            }
+        """)
+        token_stats_layout = QHBoxLayout(self.token_stats_frame)
+        token_stats_layout.setContentsMargins(10, 4, 10, 4)
+
+        self.token_stats_label = QLabel("Токены: Вход: 0 | Выход: 0 | Всего: 0")
+        self.token_stats_label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                font-size: 11px;
+            }
+        """)
+        token_stats_layout.addWidget(self.token_stats_label)
+        token_stats_layout.addStretch()
+
+        layout.addWidget(self.token_stats_frame)
 
         # Input area - dark theme
         input_frame = QFrame()
@@ -256,7 +296,11 @@ class ChatWidget(QWidget):
         # Remove stretch before adding
         self._remove_stretch()
 
-        bubble = MessageBubble(text, is_user=True, images=images)
+        # Count tokens for the message
+        token_count = count_tokens(text)
+        self._total_input_tokens += token_count
+
+        bubble = MessageBubble(text, is_user=True, images=images, token_count=token_count)
         bubble.thumbnail_clicked.connect(self._open_image_viewer)
         self.messages_layout.addWidget(bubble)
 
@@ -265,6 +309,9 @@ class ChatWidget(QWidget):
             for img in images:
                 if img not in self._all_images:
                     self._all_images.append(img)
+
+        # Update token stats
+        self._update_token_stats()
 
         # Add stretch back
         self.messages_layout.addStretch()
@@ -278,7 +325,13 @@ class ChatWidget(QWidget):
         if thoughts:
             self._add_thoughts_bubble(thoughts)
 
-        bubble = MessageBubble(text, is_user=False, images=images)
+        # Count tokens for the response
+        token_count = count_tokens(text)
+        if thoughts:
+            token_count += count_tokens(thoughts)
+        self._total_output_tokens += token_count
+
+        bubble = MessageBubble(text, is_user=False, images=images, token_count=token_count)
         bubble.thumbnail_clicked.connect(self._open_image_viewer)
         self.messages_layout.addWidget(bubble)
 
@@ -287,6 +340,9 @@ class ChatWidget(QWidget):
             for img in images:
                 if img not in self._all_images:
                     self._all_images.append(img)
+
+        # Update token stats
+        self._update_token_stats()
 
         self.messages_layout.addStretch()
         self._scroll_to_bottom()
@@ -584,6 +640,15 @@ class ChatWidget(QWidget):
         scrollbar = self.scroll_area.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _update_token_stats(self):
+        """Update the token statistics display."""
+        total = self._total_input_tokens + self._total_output_tokens
+        self.token_stats_label.setText(
+            f"Токены: Вход: {self._total_input_tokens:,} | "
+            f"Выход: {self._total_output_tokens:,} | "
+            f"Всего: {total:,}"
+        )
+
     def _open_image_viewer(self, image_path: str):
         """Open the image viewer for the given image.
 
@@ -647,6 +712,11 @@ class ChatWidget(QWidget):
 
         # Clear tracked images
         self._all_images.clear()
+
+        # Reset token counters
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._update_token_stats()
 
         self.messages_layout.addStretch()
 
