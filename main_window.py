@@ -25,7 +25,6 @@ from PySide6.QtCore import Qt, QThread, Signal, QObject
 
 from config import Config, load_config
 from gemini_client import GeminiClient, ModelResponse
-from image_manager import ImageManager
 from chat_widget import ChatWidget
 from document_parser import DocumentParser
 from prompt_builder import PromptBuilder
@@ -70,24 +69,6 @@ class SendMessageWorker(QThread):
             self.signals.error.emit(str(e))
 
 
-class SendImagesWorker(QThread):
-    """Worker thread for sending images only."""
-
-    def __init__(self, client: GeminiClient, images: list[str], context: str = ""):
-        super().__init__()
-        self.client = client
-        self.images = images
-        self.context = context
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            response = self.client.send_images_only(self.images, self.context)
-            self.signals.finished.emit(response)
-        except Exception as e:
-            self.signals.error.emit(str(e))
-
-
 class SendFilesWorker(QThread):
     """Worker thread for sending files (PDF blocks)."""
 
@@ -113,7 +94,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.gemini_client = GeminiClient(config)
-        self.image_manager = ImageManager(config)
         self.current_worker: Optional[QThread] = None
 
         # Initialize document handling (not loaded at startup)
@@ -359,44 +339,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(docs_group)
 
-        # Search directories
-        dirs_group = QGroupBox("Search Directories")
-        dirs_layout = QVBoxLayout(dirs_group)
-
-        self.dirs_list = QListWidget()
-        self.dirs_list.setMaximumHeight(80)
-        dirs_layout.addWidget(self.dirs_list)
-
-        dirs_buttons = QHBoxLayout()
-        add_dir_btn = QPushButton("Add")
-        add_dir_btn.clicked.connect(self._add_search_directory)
-        remove_dir_btn = QPushButton("Remove")
-        remove_dir_btn.clicked.connect(self._remove_search_directory)
-        dirs_buttons.addWidget(add_dir_btn)
-        dirs_buttons.addWidget(remove_dir_btn)
-        dirs_layout.addLayout(dirs_buttons)
-
-        layout.addWidget(dirs_group)
-
-        # Loaded files
-        files_group = QGroupBox("Loaded Files")
-        files_layout = QVBoxLayout(files_group)
-
-        self.files_list = QListWidget()
-        self.files_list.setMaximumHeight(100)
-        files_layout.addWidget(self.files_list)
-
-        files_buttons = QHBoxLayout()
-        add_files_btn = QPushButton("Add Files")
-        add_files_btn.clicked.connect(self._add_files)
-        clear_files_btn = QPushButton("Clear")
-        clear_files_btn.clicked.connect(self._clear_files)
-        files_buttons.addWidget(add_files_btn)
-        files_buttons.addWidget(clear_files_btn)
-        files_layout.addLayout(files_buttons)
-
-        layout.addWidget(files_group)
-
         # Actions
         actions_layout = QVBoxLayout()
 
@@ -568,39 +510,6 @@ class MainWindow(QMainWindow):
             "frequency_penalty": config.frequency_penalty,
         })
 
-    def _add_search_directory(self):
-        """Add a search directory."""
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Directory"
-        )
-        if directory:
-            if self.image_manager.add_search_directory(directory):
-                self.dirs_list.addItem(directory)
-
-    def _remove_search_directory(self):
-        """Remove selected search directory."""
-        current = self.dirs_list.currentItem()
-        if current:
-            self.image_manager.remove_search_directory(current.text())
-            self.dirs_list.takeItem(self.dirs_list.row(current))
-
-    def _add_files(self):
-        """Add files to load."""
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Files",
-            "",
-            "Images & Documents (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.pdf *.txt *.md)"
-        )
-        for file_path in files:
-            if self.image_manager.add_loaded_file(file_path):
-                self.files_list.addItem(os.path.basename(file_path))
-
-    def _clear_files(self):
-        """Clear loaded files."""
-        self.image_manager.clear_loaded_files()
-        self.files_list.clear()
-
     def _new_chat(self):
         """Start a new chat."""
         self.gemini_client.start_new_chat()
@@ -619,19 +528,12 @@ class MainWindow(QMainWindow):
 
     def _on_message_sent(self, text: str):
         """Handle user message."""
-        # Get loaded images
-        images = self.image_manager.get_loaded_images()
-        files = [f for f in self.image_manager.get_loaded_files()
-                 if not self.image_manager.is_image_file(f)]
-
         # Show user message in chat
-        self.chat_widget.add_user_message(text, images if images else None)
+        self.chat_widget.add_user_message(text)
 
         # Log the request
         self.api_log_widget.log_request(
             text=text,
-            images=images,
-            files=files,
             model=self.gemini_client.current_model
         )
 
@@ -640,7 +542,7 @@ class MainWindow(QMainWindow):
 
         # Send to Gemini in background thread
         self.current_worker = SendMessageWorker(
-            self.gemini_client, text, images, files
+            self.gemini_client, text
         )
         self.current_worker.signals.finished.connect(self._on_response_received)
         self.current_worker.signals.error.connect(self._on_error)
@@ -662,41 +564,13 @@ class MainWindow(QMainWindow):
         )
 
         # Check if model is requesting document blocks (new flow)
+        # Check if model is requesting document blocks
         if response.needs_blocks and response.requested_blocks:
             requested_ids = [r.block_id for r in response.requested_blocks]
             self.chat_widget.add_system_message(
                 f"Модель запрашивает блоки: {', '.join(requested_ids)}"
             )
             self._send_requested_blocks(requested_ids)
-            return
-
-        # Check if model is requesting images (old flow)
-        if response.needs_images and response.requested_images:
-            # Model is requesting images
-            requested_names = [r.filename for r in response.requested_images]
-            self.chat_widget.add_image_request_message(requested_names)
-
-            # Try to find requested images
-            found_images = []
-            not_found = []
-
-            for req in response.requested_images:
-                matches = self.image_manager.find_image(req.filename)
-                if matches:
-                    found_images.extend(matches[:1])  # Take first match
-                else:
-                    not_found.append(req.filename)
-
-            if found_images:
-                # Show sent images in chat
-                self.chat_widget.add_sent_images_message(found_images)
-                self._send_found_images(found_images)
-            elif not_found:
-                # Let user manually add images
-                self.chat_widget.add_system_message(
-                    f"Could not find: {', '.join(not_found)}\n"
-                    "Please add the images manually using 'Add Files' button."
-                )
 
     def _send_requested_blocks(self, block_ids: list[str]) -> None:
         """Send requested document blocks to the model."""
@@ -745,22 +619,6 @@ class MainWindow(QMainWindow):
             self.gemini_client,
             file_paths,
             context
-        )
-        self.current_worker.signals.finished.connect(self._on_response_received)
-        self.current_worker.signals.error.connect(self._on_error)
-        self.current_worker.start()
-
-    def _send_found_images(self, images: list[str]):
-        """Send found images to model."""
-        self.chat_widget.set_loading(True)
-
-        # Log images being sent
-        self.api_log_widget.log_images_sent(images, "Here are the requested images.")
-
-        self.current_worker = SendImagesWorker(
-            self.gemini_client,
-            images,
-            "Here are the requested images."
         )
         self.current_worker.signals.finished.connect(self._on_response_received)
         self.current_worker.signals.error.connect(self._on_error)
