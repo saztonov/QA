@@ -29,6 +29,7 @@ from chat_widget import ChatWidget
 from document_parser import DocumentParser
 from prompt_builder import PromptBuilder
 from block_manager import BlockManager
+from api_log_widget import ApiLogWidget
 
 
 class WorkerSignals(QObject):
@@ -156,7 +157,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self):
         """Setup the main UI."""
         self.setWindowTitle("Gemini Chat")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1300, 700)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -165,18 +166,24 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Splitter for resizable panels
+        # Main splitter for resizable panels
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left panel - files and settings
         left_panel = self._create_left_panel()
         splitter.addWidget(left_panel)
 
-        # Right panel - chat
+        # Center panel - chat
         self.chat_widget = ChatWidget()
         splitter.addWidget(self.chat_widget)
 
-        splitter.setSizes([300, 700])
+        # Right panel - API log
+        self.api_log_widget = ApiLogWidget()
+        self.api_log_widget.setMinimumWidth(300)
+        self.api_log_widget.setMaximumWidth(500)
+        splitter.addWidget(self.api_log_widget)
+
+        splitter.setSizes([280, 620, 400])
         main_layout.addWidget(splitter)
 
     def _create_left_panel(self) -> QWidget:
@@ -441,6 +448,12 @@ class MainWindow(QMainWindow):
                     self._update_docs_list()
                     self._update_document_status()
                     self.chat_widget.add_system_message(f"Загружен документ: {os.path.basename(file_path)}")
+                    # Log document loaded
+                    doc_data = self.document_parser.parse()
+                    self.api_log_widget.log_document_loaded(file_path, len(doc_data.image_blocks))
+                    # Log system prompt
+                    if self.prompt_builder:
+                        self.api_log_widget.log_system_prompt(self.prompt_builder.build_system_prompt())
                 else:
                     QMessageBox.warning(self, "Ошибка", "Не удалось загрузить документ")
 
@@ -459,6 +472,8 @@ class MainWindow(QMainWindow):
                 self._update_docs_list()
                 self._update_document_status()
                 self.chat_widget.add_system_message(f"Загружена папка кропов: {os.path.basename(directory)}")
+                # Log crops loaded
+                self.api_log_widget.log_crops_loaded(directory)
 
     def _remove_document(self) -> None:
         """Remove selected document or crops folder."""
@@ -492,6 +507,7 @@ class MainWindow(QMainWindow):
         """Handle model change."""
         self.gemini_client.set_model(model)
         self.chat_widget.add_system_message(f"Model changed to: {model}")
+        self.api_log_widget.log_model_change(model)
 
     def _add_search_directory(self):
         """Add a search directory."""
@@ -530,6 +546,7 @@ class MainWindow(QMainWindow):
         """Start a new chat."""
         self.gemini_client.start_new_chat()
         self.chat_widget.clear_chat()
+        self.api_log_widget.log_new_chat()
 
         # Show document status
         if self.document_parser:
@@ -551,6 +568,14 @@ class MainWindow(QMainWindow):
         # Show user message in chat
         self.chat_widget.add_user_message(text, images if images else None)
 
+        # Log the request
+        self.api_log_widget.log_request(
+            text=text,
+            images=images,
+            files=files,
+            model=self.gemini_client.current_model
+        )
+
         # Disable input while processing
         self.chat_widget.set_loading(True)
 
@@ -566,6 +591,15 @@ class MainWindow(QMainWindow):
         """Handle response from Gemini."""
         self.chat_widget.set_loading(False)
         self.chat_widget.add_model_message(response.text)
+
+        # Log the response
+        self.api_log_widget.log_response(
+            text=response.text,
+            needs_blocks=response.needs_blocks,
+            needs_images=response.needs_images,
+            requested_blocks=response.requested_blocks if response.needs_blocks else None,
+            requested_images=response.requested_images if response.needs_images else None
+        )
 
         # Check if model is requesting document blocks (new flow)
         if response.needs_blocks and response.requested_blocks:
@@ -646,6 +680,9 @@ class MainWindow(QMainWindow):
         """Send block files to the model."""
         self.chat_widget.set_loading(True)
 
+        # Log files being sent
+        self.api_log_widget.log_files_sent(file_paths, context)
+
         self.current_worker = SendFilesWorker(
             self.gemini_client,
             file_paths,
@@ -658,6 +695,9 @@ class MainWindow(QMainWindow):
     def _send_found_images(self, images: list[str]):
         """Send found images to model."""
         self.chat_widget.set_loading(True)
+
+        # Log images being sent
+        self.api_log_widget.log_images_sent(images, "Here are the requested images.")
 
         self.current_worker = SendImagesWorker(
             self.gemini_client,
@@ -672,4 +712,5 @@ class MainWindow(QMainWindow):
         """Handle error."""
         self.chat_widget.set_loading(False)
         self.chat_widget.add_system_message(f"Error: {error}")
+        self.api_log_widget.log_error(error)
         QMessageBox.warning(self, "Error", error)
