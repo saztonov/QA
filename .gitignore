@@ -4,3 +4,5 @@
 .env
 .claude/
 /__pycache__
+api_log_*.json
+*.png
