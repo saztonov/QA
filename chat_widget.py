@@ -256,13 +256,96 @@ class ChatWidget(QWidget):
         self.messages_layout.addStretch()
         self._scroll_to_bottom()
 
-    def add_model_message(self, text: str):
+    def add_model_message(self, text: str, thoughts: Optional[str] = None, images: Optional[list[str]] = None):
         """Add a model message to the chat."""
         self._remove_stretch()
 
-        bubble = MessageBubble(text, is_user=False)
+        # Show thoughts first if available
+        if thoughts:
+            self._add_thoughts_bubble(thoughts)
+
+        bubble = MessageBubble(text, is_user=False, images=images)
         self.messages_layout.addWidget(bubble)
 
+        self.messages_layout.addStretch()
+        self._scroll_to_bottom()
+
+    def _add_thoughts_bubble(self, thoughts: str):
+        """Add a thoughts bubble (collapsible)."""
+        thoughts_frame = QFrame()
+        thoughts_frame.setStyleSheet("""
+            QFrame {
+                background-color: #2a2a3d;
+                border: 1px solid #4a4a6a;
+                border-radius: 8px;
+                margin-right: 50px;
+                margin-bottom: 4px;
+            }
+        """)
+
+        thoughts_layout = QVBoxLayout(thoughts_frame)
+        thoughts_layout.setContentsMargins(10, 8, 10, 8)
+        thoughts_layout.setSpacing(4)
+
+        # Header
+        header = QLabel("Размышления модели")
+        header.setStyleSheet("""
+            QLabel {
+                color: #9fa8da;
+                font-weight: bold;
+                font-size: 11px;
+            }
+        """)
+        thoughts_layout.addWidget(header)
+
+        # Thoughts content
+        thoughts_text = QLabel(thoughts[:2000] + "..." if len(thoughts) > 2000 else thoughts)
+        thoughts_text.setWordWrap(True)
+        thoughts_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        thoughts_text.setStyleSheet("""
+            QLabel {
+                color: #b0bec5;
+                font-size: 12px;
+                font-style: italic;
+            }
+        """)
+        thoughts_layout.addWidget(thoughts_text)
+
+        self.messages_layout.addWidget(thoughts_frame)
+
+    def add_sent_images_message(self, image_paths: list[str], context: str = ""):
+        """Add a message showing images sent to the model."""
+        self._remove_stretch()
+
+        frame = QFrame()
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #1a3a1a;
+                border: 1px solid #2e7d32;
+                border-radius: 8px;
+                margin-left: 50px;
+            }
+        """)
+
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        header = QLabel(f"Отправлено изображений: {len(image_paths)}")
+        header.setStyleSheet("color: #81c784; font-weight: bold; font-size: 11px;")
+        layout.addWidget(header)
+
+        # Show thumbnails
+        if image_paths:
+            images_layout = QHBoxLayout()
+            images_layout.setSpacing(4)
+            for img_path in image_paths[:5]:  # Limit to 5 thumbnails
+                thumb = ImageThumbnail(img_path, 60)
+                images_layout.addWidget(thumb)
+            images_layout.addStretch()
+            layout.addLayout(images_layout)
+
+        self.messages_layout.addWidget(frame)
         self.messages_layout.addStretch()
         self._scroll_to_bottom()
 

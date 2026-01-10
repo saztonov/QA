@@ -25,7 +25,7 @@ class GenerationConfig:
     """Configuration for model generation parameters."""
 
     # Core generation parameters
-    temperature: float = 1.0
+    temperature: float = 1.0  # Fixed at 1.0
     top_p: float = 0.95
     top_k: int = 40
     max_output_tokens: int = 8192
@@ -33,6 +33,10 @@ class GenerationConfig:
     # Media resolution for images/video
     # LOW = 64 tokens, MEDIUM = 256 tokens, HIGH = zoomed 256 tokens
     media_resolution: str = "MEDIA_RESOLUTION_MEDIUM"
+
+    # Thinking mode
+    include_thoughts: bool = True
+    thinking_budget: int = 8192  # Token budget for thinking
 
     # Optional parameters
     candidate_count: int = 1
@@ -162,27 +166,18 @@ class ModelSettingsWidget(QWidget):
         gen_layout = QVBoxLayout(gen_group)
         gen_layout.setSpacing(12)
 
-        # Temperature (0.0 - 2.0)
+        # Temperature (fixed at 1.0)
         temp_layout = QHBoxLayout()
         temp_label = QLabel("Temperature:")
-        temp_label.setToolTip("Controls randomness. Lower = more deterministic (0.0-2.0)")
+        temp_label.setToolTip("Fixed at 1.0 for optimal results")
         temp_label.setMinimumWidth(100)
 
-        self.temp_slider = QSlider(Qt.Orientation.Horizontal)
-        self.temp_slider.setRange(0, 200)
-        self.temp_slider.setValue(int(self.config.temperature * 100))
-        self.temp_slider.valueChanged.connect(self._on_temp_slider_changed)
-
-        self.temp_spinbox = QDoubleSpinBox()
-        self.temp_spinbox.setRange(0.0, 2.0)
-        self.temp_spinbox.setSingleStep(0.1)
-        self.temp_spinbox.setDecimals(2)
-        self.temp_spinbox.setValue(self.config.temperature)
-        self.temp_spinbox.valueChanged.connect(self._on_temp_spinbox_changed)
+        temp_value = QLabel("1.0 (fixed)")
+        temp_value.setStyleSheet("color: #4fc3f7; font-weight: bold;")
 
         temp_layout.addWidget(temp_label)
-        temp_layout.addWidget(self.temp_slider, 1)
-        temp_layout.addWidget(self.temp_spinbox)
+        temp_layout.addStretch()
+        temp_layout.addWidget(temp_value)
         gen_layout.addLayout(temp_layout)
 
         # Top P (0.0 - 1.0)
@@ -278,6 +273,40 @@ class ModelSettingsWidget(QWidget):
 
         layout.addWidget(media_group)
 
+        # Thinking settings group
+        thinking_group = QGroupBox("Thinking Mode")
+        thinking_layout = QVBoxLayout(thinking_group)
+        thinking_layout.setSpacing(12)
+
+        # Include thoughts checkbox
+        from PySide6.QtWidgets import QCheckBox
+        self.include_thoughts_checkbox = QCheckBox("Show model thoughts")
+        self.include_thoughts_checkbox.setChecked(self.config.include_thoughts)
+        self.include_thoughts_checkbox.setToolTip(
+            "Display the model's reasoning process in chat"
+        )
+        self.include_thoughts_checkbox.stateChanged.connect(self._on_thoughts_changed)
+        thinking_layout.addWidget(self.include_thoughts_checkbox)
+
+        # Thinking budget
+        budget_layout = QHBoxLayout()
+        budget_label = QLabel("Thinking Budget:")
+        budget_label.setToolTip("Token budget for model thinking (1-24576)")
+        budget_label.setMinimumWidth(100)
+
+        self.thinking_budget_spinbox = QSpinBox()
+        self.thinking_budget_spinbox.setRange(1, 24576)
+        self.thinking_budget_spinbox.setValue(self.config.thinking_budget)
+        self.thinking_budget_spinbox.setSingleStep(1024)
+        self.thinking_budget_spinbox.valueChanged.connect(self._on_thinking_budget_changed)
+
+        budget_layout.addWidget(budget_label)
+        budget_layout.addStretch()
+        budget_layout.addWidget(self.thinking_budget_spinbox)
+        thinking_layout.addLayout(budget_layout)
+
+        layout.addWidget(thinking_group)
+
         # Advanced settings group (collapsed by default)
         advanced_group = QGroupBox("Advanced")
         advanced_layout = QVBoxLayout(advanced_group)
@@ -328,21 +357,14 @@ class ModelSettingsWidget(QWidget):
 
         layout.addStretch()
 
-    def _on_temp_slider_changed(self, value: int):
-        """Handle temperature slider change."""
-        temp = value / 100.0
-        self.temp_spinbox.blockSignals(True)
-        self.temp_spinbox.setValue(temp)
-        self.temp_spinbox.blockSignals(False)
-        self.config.temperature = temp
+    def _on_thoughts_changed(self, state: int):
+        """Handle include thoughts checkbox change."""
+        self.config.include_thoughts = state == 2  # Qt.Checked = 2
         self._emit_settings()
 
-    def _on_temp_spinbox_changed(self, value: float):
-        """Handle temperature spinbox change."""
-        self.temp_slider.blockSignals(True)
-        self.temp_slider.setValue(int(value * 100))
-        self.temp_slider.blockSignals(False)
-        self.config.temperature = value
+    def _on_thinking_budget_changed(self, value: int):
+        """Handle thinking budget change."""
+        self.config.thinking_budget = value
         self._emit_settings()
 
     def _on_topp_slider_changed(self, value: int):
@@ -407,14 +429,14 @@ class ModelSettingsWidget(QWidget):
         self.config = GenerationConfig()
 
         # Update UI
-        self.temp_slider.setValue(int(self.config.temperature * 100))
-        self.temp_spinbox.setValue(self.config.temperature)
         self.topp_slider.setValue(int(self.config.top_p * 100))
         self.topp_spinbox.setValue(self.config.top_p)
         self.topk_slider.setValue(self.config.top_k)
         self.topk_spinbox.setValue(self.config.top_k)
         self.max_tokens_spinbox.setValue(self.config.max_output_tokens)
         self.resolution_combo.setCurrentIndex(1)
+        self.include_thoughts_checkbox.setChecked(self.config.include_thoughts)
+        self.thinking_budget_spinbox.setValue(self.config.thinking_budget)
         self.presence_spinbox.setValue(self.config.presence_penalty)
         self.frequency_spinbox.setValue(self.config.frequency_penalty)
 
@@ -429,13 +451,6 @@ class ModelSettingsWidget(QWidget):
         self.config = config
 
         # Update UI without emitting signals
-        self.temp_slider.blockSignals(True)
-        self.temp_spinbox.blockSignals(True)
-        self.temp_slider.setValue(int(config.temperature * 100))
-        self.temp_spinbox.setValue(config.temperature)
-        self.temp_slider.blockSignals(False)
-        self.temp_spinbox.blockSignals(False)
-
         self.topp_slider.blockSignals(True)
         self.topp_spinbox.blockSignals(True)
         self.topp_slider.setValue(int(config.top_p * 100))
@@ -461,6 +476,15 @@ class ModelSettingsWidget(QWidget):
                 self.resolution_combo.setCurrentIndex(i)
                 self.resolution_combo.blockSignals(False)
                 break
+
+        # Thinking settings
+        self.include_thoughts_checkbox.blockSignals(True)
+        self.include_thoughts_checkbox.setChecked(config.include_thoughts)
+        self.include_thoughts_checkbox.blockSignals(False)
+
+        self.thinking_budget_spinbox.blockSignals(True)
+        self.thinking_budget_spinbox.setValue(config.thinking_budget)
+        self.thinking_budget_spinbox.blockSignals(False)
 
         self.presence_spinbox.blockSignals(True)
         self.presence_spinbox.setValue(config.presence_penalty)

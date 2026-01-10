@@ -649,7 +649,7 @@ class MainWindow(QMainWindow):
     def _on_response_received(self, response: ModelResponse):
         """Handle response from Gemini."""
         self.chat_widget.set_loading(False)
-        self.chat_widget.add_model_message(response.text)
+        self.chat_widget.add_model_message(response.text, thoughts=response.thoughts)
 
         # Log the response
         self.api_log_widget.log_response(
@@ -657,7 +657,8 @@ class MainWindow(QMainWindow):
             needs_blocks=response.needs_blocks,
             needs_images=response.needs_images,
             requested_blocks=response.requested_blocks if response.needs_blocks else None,
-            requested_images=response.requested_images if response.needs_images else None
+            requested_images=response.requested_images if response.needs_images else None,
+            thoughts=response.thoughts
         )
 
         # Check if model is requesting document blocks (new flow)
@@ -687,9 +688,8 @@ class MainWindow(QMainWindow):
                     not_found.append(req.filename)
 
             if found_images:
-                self.chat_widget.add_system_message(
-                    f"Found {len(found_images)} image(s), sending to model..."
-                )
+                # Show sent images in chat
+                self.chat_widget.add_sent_images_message(found_images)
                 self._send_found_images(found_images)
             elif not_found:
                 # Let user manually add images
@@ -726,9 +726,8 @@ class MainWindow(QMainWindow):
                 f"- {desc}" for desc in block_descriptions
             ) + "\n\nПроанализируй эти изображения и дай полный ответ на вопрос пользователя."
 
-            self.chat_widget.add_system_message(
-                f"Отправляю {len(found_paths)} блок(ов) модели..."
-            )
+            # Show sent files in chat
+            self.chat_widget.add_sent_images_message(found_paths)
             self._send_block_files(found_paths, context)
         else:
             self.chat_widget.add_system_message(

@@ -233,14 +233,19 @@ class ApiLogWidget(QWidget):
         self.add_log_entry("REQUEST", data)
 
     def log_response(self, text: str, needs_blocks: bool = False, needs_images: bool = False,
-                     requested_blocks: list = None, requested_images: list = None) -> None:
+                     requested_blocks: list = None, requested_images: list = None,
+                     thoughts: str = None) -> None:
         """Log an incoming response from the model."""
         data = {
             "response": text[:1000] + "..." if len(text) > 1000 else text,
             "response_length": len(text),
             "needs_blocks": needs_blocks,
             "needs_images": needs_images,
+            "has_thoughts": thoughts is not None,
         }
+        if thoughts:
+            data["thoughts_preview"] = thoughts[:500] + "..." if len(thoughts) > 500 else thoughts
+            data["thoughts_length"] = len(thoughts)
         if requested_blocks:
             data["requested_blocks"] = [b.block_id for b in requested_blocks]
         if requested_images:

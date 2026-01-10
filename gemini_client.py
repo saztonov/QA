@@ -45,6 +45,7 @@ class ModelResponse:
     """Response from the model."""
 
     text: str
+    thoughts: Optional[str] = None  # Model's thinking/reasoning
     needs_images: bool = False
     requested_images: list[ImageRequest] = field(default_factory=list)
     needs_blocks: bool = False
@@ -128,6 +129,13 @@ class GeminiClient:
             if self.generation_config.media_resolution:
                 gen_config_kwargs["media_resolution"] = self.generation_config.media_resolution
 
+            # Thinking mode configuration
+            if self.generation_config.include_thoughts:
+                gen_config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    include_thoughts=True,
+                    thinking_budget=self.generation_config.thinking_budget
+                )
+
         if gen_config_kwargs:
             config_dict["config"] = types.GenerateContentConfig(**gen_config_kwargs)
 
@@ -201,6 +209,32 @@ class GeminiClient:
 
         return False, []
 
+    def _extract_thoughts_and_text(self, response) -> tuple[str, Optional[str]]:
+        """Extract thoughts and text from model response."""
+        thoughts_parts = []
+        text_parts = []
+
+        try:
+            if hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'thought') and part.thought:
+                                thoughts_parts.append(part.text)
+                            elif hasattr(part, 'text'):
+                                text_parts.append(part.text)
+        except Exception:
+            pass
+
+        # Fallback to response.text if no parts found
+        if not text_parts:
+            text_parts = [response.text] if hasattr(response, 'text') else []
+
+        thoughts = "\n".join(thoughts_parts) if thoughts_parts else None
+        text = "\n".join(text_parts)
+
+        return text, thoughts
+
     def send_message(
         self,
         text: str,
@@ -231,7 +265,9 @@ class GeminiClient:
 
         # Send to model
         response = self.chat.send_message(contents)
-        response_text = response.text
+
+        # Extract thoughts and text from response
+        response_text, thoughts = self._extract_thoughts_and_text(response)
 
         # Save to history
         self.history.append(ChatMessage(
@@ -255,6 +291,7 @@ class GeminiClient:
 
         return ModelResponse(
             text=response_text,
+            thoughts=thoughts,
             needs_images=needs_images,
             requested_images=requested_images,
             needs_blocks=needs_blocks,
@@ -279,7 +316,9 @@ class GeminiClient:
             contents.append("Here are the requested images.")
 
         response = self.chat.send_message(contents)
-        response_text = response.text
+
+        # Extract thoughts and text from response
+        response_text, thoughts = self._extract_thoughts_and_text(response)
 
         # Save to history
         self.history.append(ChatMessage(
@@ -299,6 +338,7 @@ class GeminiClient:
 
         return ModelResponse(
             text=response_text,
+            thoughts=thoughts,
             needs_images=needs_images,
             requested_images=requested_images,
             needs_blocks=needs_blocks,
@@ -323,7 +363,9 @@ class GeminiClient:
             contents.append("Вот запрошенные графические блоки.")
 
         response = self.chat.send_message(contents)
-        response_text = response.text
+
+        # Extract thoughts and text from response
+        response_text, thoughts = self._extract_thoughts_and_text(response)
 
         # Save to history
         self.history.append(ChatMessage(
@@ -343,6 +385,7 @@ class GeminiClient:
 
         return ModelResponse(
             text=response_text,
+            thoughts=thoughts,
             needs_images=needs_images,
             requested_images=requested_images,
             needs_blocks=needs_blocks,
