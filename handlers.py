@@ -38,10 +38,12 @@ class MainWindowHandlers:
     # Planner Handlers
     # =========================================================================
 
-    def _on_plan_received(self, plan: Plan, raw_json: str, original_question: str):
+    def _on_plan_received(self, plan: Plan, raw_json: str, original_question: str, usage: dict = None):
         """Handle planning response from Flash model."""
-        # Log the plan response
-        self.api_log_widget.log_plan_response(plan.model_dump(), raw_json)
+        usage = usage or {}
+
+        # Log the plan response with usage
+        self.api_log_widget.log_plan_response(plan.model_dump(), raw_json, usage=usage)
 
         # Show plan decision in chat
         decision_messages = {
@@ -348,24 +350,28 @@ class MainWindowHandlers:
     # Answer Handlers
     # =========================================================================
 
-    def _on_answer_received(self, answer: Answer, raw_json: str, question: str, iteration: int):
+    def _on_answer_received(self, answer: Answer, raw_json: str, question: str, iteration: int, usage: dict = None):
         """Handle answer from Pro model (Answerer)."""
+        usage = usage or {}
         self.chat_widget.set_loading(False)
 
-        # Log the answer response
+        # Log the answer response with usage
         self.api_log_widget.log_answer_response(
             answer_data=answer.model_dump(),
             raw_json=raw_json,
-            iteration=iteration
+            iteration=iteration,
+            usage=usage
         )
 
-        # Display answer with citations
+        # Display answer with citations and token counts
         citations_dicts = [c.model_dump() for c in answer.citations]
         self.chat_widget.add_answer_with_citations(
             answer_text=answer.answer_markdown,
             citations=citations_dicts,
             confidence=answer.confidence,
-            thoughts=None
+            thoughts=usage.get("thought_text"),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0)
         )
 
         # Check if needs more evidence and haven't exceeded max iterations

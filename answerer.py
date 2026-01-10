@@ -19,6 +19,7 @@ from token_utils import (
 )
 from file_utils import create_file_part, create_image_part
 from api_utils import execute_with_retry
+from thinking_context import ThinkingContext
 
 if TYPE_CHECKING:
     from document_parser import DocumentParser
@@ -86,6 +87,7 @@ class Answerer:
         parser: Optional["DocumentParser"] = None,
         conversation_memory: Optional["ConversationMemory"] = None,
         media_resolution: str = "MEDIA_RESOLUTION_MEDIUM",
+        thinking_context: Optional[ThinkingContext] = None,
     ):
         """Initialize answerer.
 
@@ -94,11 +96,13 @@ class Answerer:
             parser: Optional document parser for context.
             conversation_memory: Optional conversation memory for context.
             media_resolution: Media resolution setting for images.
+            thinking_context: Optional thinking context for maintaining reasoning continuity.
         """
         self.config = config
         self.parser = parser
         self.conversation_memory = conversation_memory
         self.media_resolution = media_resolution
+        self.thinking_context = thinking_context or ThinkingContext()
         self.client = genai.Client(api_key=config.api_key)
 
     def set_parser(self, parser: "DocumentParser") -> None:
@@ -116,6 +120,10 @@ class Answerer:
             resolution: One of MEDIA_RESOLUTION_LOW, MEDIA_RESOLUTION_MEDIUM, MEDIA_RESOLUTION_HIGH
         """
         self.media_resolution = resolution
+
+    def set_thinking_context(self, context: ThinkingContext) -> None:
+        """Set or update the thinking context."""
+        self.thinking_context = context
 
     def _build_system_prompt(
         self,
@@ -279,13 +287,14 @@ class Answerer:
         file_paths: Optional[list[Union[str, Path]]] = None,
         context_message: Optional[str] = None,
         iteration: int = 1,
-    ) -> tuple[Answer, str]:
-        """Generate an answer and return both parsed Answer and raw response.
+    ) -> tuple[Answer, str, dict]:
+        """Generate an answer and return parsed Answer, raw response, and usage metadata.
 
         Useful for logging and debugging.
 
         Returns:
-            Tuple of (Answer object, raw JSON response string).
+            Tuple of (Answer object, raw JSON response string, usage dict).
+            Usage dict contains: input_tokens, output_tokens, total_tokens, thoughts_tokens, thought_text
         """
         image_paths = image_paths or []
         file_paths = file_paths or []
@@ -322,17 +331,51 @@ class Answerer:
             response_mime_type="application/json",
             response_schema=ANSWER_JSON_SCHEMA,
             media_resolution=self.media_resolution,
+            # Enable thinking mode for better reasoning
+            thinking_config=types.ThinkingConfig(
+                include_thoughts=True,
+                thinking_level="high",  # Gemini 3 Pro - high quality reasoning
+            ),
         )
 
+        # Initialize usage dict
+        usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "thoughts_tokens": 0,
+            "thought_text": None,
+            "thought_signature": None,
+        }
+
         try:
-            # Execute with retry
-            response_text = execute_with_retry(
-                self.client, self.MODEL_NAME, contents, gen_config
+            # Execute API call directly to get full response
+            response = self.client.models.generate_content(
+                model=self.MODEL_NAME,
+                contents=contents,
+                config=gen_config,
             )
+
+            # Extract usage metadata
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage["input_tokens"] = response.usage_metadata.prompt_token_count or 0
+                usage["output_tokens"] = response.usage_metadata.candidates_token_count or 0
+                usage["total_tokens"] = response.usage_metadata.total_token_count or 0
+                if hasattr(response.usage_metadata, 'thoughts_token_count'):
+                    usage["thoughts_tokens"] = response.usage_metadata.thoughts_token_count or 0
+
+            # Extract thoughts and signature from response
+            thought_text = self.thinking_context.add_from_response(response)
+            if thought_text:
+                usage["thought_text"] = thought_text
+            if self.thinking_context.get_latest_signature():
+                usage["thought_signature"] = self.thinking_context.get_latest_signature()
+
+            response_text = response.text.strip()
             answer_dict = json.loads(response_text)
             answer = Answer.model_validate(answer_dict)
 
-            return answer, response_text
+            return answer, response_text, usage
 
         except Exception as e:
             fallback_answer = Answer(
@@ -344,7 +387,7 @@ class Answerer:
                 confidence="low"
             )
             fallback_json = fallback_answer.model_dump_json(indent=2)
-            return fallback_answer, fallback_json
+            return fallback_answer, fallback_json, usage
 
     def get_context_stats(self, image_paths: list = None, file_paths: list = None) -> dict:
         """Get statistics about the context being sent.

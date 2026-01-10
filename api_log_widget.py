@@ -362,12 +362,13 @@ class ApiLogWidget(QWidget):
 
         self.add_log_entry("PLAN_REQUEST", data)
 
-    def log_plan_response(self, plan_data: dict, raw_json: str = None) -> None:
+    def log_plan_response(self, plan_data: dict, raw_json: str = None, usage: dict = None) -> None:
         """Log planning response from Flash model.
 
         Args:
             plan_data: Dictionary with plan details (decision, reasoning, blocks, etc.)
             raw_json: Optional raw JSON response for debugging.
+            usage: Optional usage metadata from API (tokens).
         """
         data = {
             "decision": plan_data.get("decision", "unknown"),
@@ -377,6 +378,15 @@ class ApiLogWidget(QWidget):
             "user_requests_count": len(plan_data.get("user_requests", [])),
             "stage": "planning",
         }
+
+        # Add usage metadata if available
+        if usage:
+            data["usage"] = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "thoughts_tokens": usage.get("thoughts_tokens", 0),
+            }
 
         # Add block details if present
         if plan_data.get("requested_blocks"):
@@ -506,7 +516,8 @@ class ApiLogWidget(QWidget):
         self,
         answer_data: dict,
         raw_json: str = None,
-        iteration: int = 1
+        iteration: int = 1,
+        usage: dict = None
     ) -> None:
         """Log answer response from Pro model.
 
@@ -514,6 +525,7 @@ class ApiLogWidget(QWidget):
             answer_data: Dictionary with answer details.
             raw_json: Optional raw JSON response.
             iteration: Current iteration number.
+            usage: Optional usage metadata from API (tokens).
         """
         data = {
             "iteration": iteration,
@@ -526,6 +538,19 @@ class ApiLogWidget(QWidget):
             "followup_rois_count": len(answer_data.get("followup_rois", [])),
             "stage": "answering",
         }
+
+        # Add usage metadata if available
+        if usage:
+            data["usage"] = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "thoughts_tokens": usage.get("thoughts_tokens", 0),
+            }
+            if usage.get("thought_text"):
+                data["has_thoughts"] = True
+            if usage.get("thought_signature"):
+                data["has_thought_signature"] = True
 
         # Add citation details
         if answer_data.get("citations"):

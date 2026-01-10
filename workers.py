@@ -88,7 +88,7 @@ class SendImagesWorker(QThread):
 class PlanWorkerSignals(QObject):
     """Signals for plan worker thread."""
 
-    finished = Signal(object, str, str)  # Plan, raw_json, original_question
+    finished = Signal(object, str, str, dict)  # Plan, raw_json, original_question, usage
     error = Signal(str)
 
 
@@ -103,8 +103,8 @@ class PlanWorker(QThread):
 
     def run(self):
         try:
-            plan, raw_json = self.planner.plan_with_raw_response(self.question)
-            self.signals.finished.emit(plan, raw_json, self.question)
+            plan, raw_json, usage = self.planner.plan_with_raw_response(self.question)
+            self.signals.finished.emit(plan, raw_json, self.question, usage)
         except Exception as e:
             self.signals.error.emit(str(e))
 
@@ -112,7 +112,7 @@ class PlanWorker(QThread):
 class AnswerWorkerSignals(QObject):
     """Signals for answer worker thread."""
 
-    finished = Signal(object, str, str, int)  # Answer, raw_json, original_question, iteration
+    finished = Signal(object, str, str, int, dict)  # Answer, raw_json, original_question, iteration, usage
     error = Signal(str)
 
 
@@ -139,14 +139,14 @@ class AnswerWorker(QThread):
 
     def run(self):
         try:
-            answer, raw_json = self.answerer.answer_with_raw_response(
+            answer, raw_json, usage = self.answerer.answer_with_raw_response(
                 question=self.question,
                 image_paths=self.image_paths,
                 file_paths=self.file_paths,
                 context_message=self.context_message,
                 iteration=self.iteration
             )
-            self.signals.finished.emit(answer, raw_json, self.question, self.iteration)
+            self.signals.finished.emit(answer, raw_json, self.question, self.iteration, usage)
         except Exception as e:
             self.signals.error.emit(str(e))
 

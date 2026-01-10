@@ -27,7 +27,7 @@ class ImageThumbnail(QLabel):
 
     clicked = Signal(str)
 
-    def __init__(self, image_path: str, size: int = 100):
+    def __init__(self, image_path: str, size: int = 120):
         super().__init__()
         self.image_path = image_path
         self.setFixedSize(size, size)
@@ -60,12 +60,41 @@ class ImageThumbnail(QLabel):
         self.clicked.emit(self.image_path)
 
 
+def _render_markdown(text: str) -> str:
+    """Convert markdown to HTML for display."""
+    import re
+    html = text
+
+    # Escape HTML entities first
+    html = html.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Headers
+    html = re.sub(r'^### (.+)$', r'<h4 style="margin:8px 0 4px 0;color:#81d4fa;">\1</h4>', html, flags=re.MULTILINE)
+    html = re.sub(r'^## (.+)$', r'<h3 style="margin:10px 0 5px 0;color:#4fc3f7;">\1</h3>', html, flags=re.MULTILINE)
+    html = re.sub(r'^# (.+)$', r'<h2 style="margin:12px 0 6px 0;color:#29b6f6;">\1</h2>', html, flags=re.MULTILINE)
+
+    # Bold/Italic
+    html = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', html)
+    html = re.sub(r'\*(.+?)\*', r'<i>\1</i>', html)
+
+    # Lists - wrap in ul
+    html = re.sub(r'^\* (.+)$', r'<li>\1</li>', html, flags=re.MULTILINE)
+    html = re.sub(r'^- (.+)$', r'<li>\1</li>', html, flags=re.MULTILINE)
+    html = re.sub(r'^(\d+)\. (.+)$', r'<li>\2</li>', html, flags=re.MULTILINE)
+
+    # Line breaks
+    html = html.replace('\n', '<br>')
+
+    return html
+
+
 class MessageBubble(QFrame):
     """Message bubble widget."""
 
     thumbnail_clicked = Signal(str)  # Emits image path when any thumbnail is clicked
 
-    def __init__(self, text: str, is_user: bool, images: Optional[list[str]] = None, token_count: int = 0):
+    def __init__(self, text: str, is_user: bool, images: Optional[list[str]] = None,
+                 input_tokens: int = 0, output_tokens: int = 0):
         super().__init__()
         self.is_user = is_user
 
@@ -78,14 +107,14 @@ class MessageBubble(QFrame):
             images_layout = QHBoxLayout()
             images_layout.setSpacing(4)
             for img_path in images[:5]:  # Limit to 5 thumbnails
-                thumb = ImageThumbnail(img_path, 60)
+                thumb = ImageThumbnail(img_path, 120)
                 thumb.clicked.connect(self.thumbnail_clicked.emit)
                 images_layout.addWidget(thumb)
             images_layout.addStretch()
             layout.addLayout(images_layout)
 
-        # Text content
-        text_label = QLabel(text)
+        # Text content with Markdown rendering for model messages
+        text_label = QLabel()
         text_label.setWordWrap(True)
         text_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -94,11 +123,23 @@ class MessageBubble(QFrame):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Minimum
         )
+
+        if not is_user:
+            # Render markdown for model messages
+            text_label.setTextFormat(Qt.TextFormat.RichText)
+            text_label.setText(_render_markdown(text))
+        else:
+            text_label.setText(text)
+
         layout.addWidget(text_label)
 
-        # Token count label
-        if token_count > 0:
-            token_label = QLabel(f"[{token_count:,} токенов]")
+        # Token count label - show input/output tokens
+        if input_tokens > 0 or output_tokens > 0:
+            if is_user:
+                token_text = f"[Вход: {input_tokens:,}]"
+            else:
+                token_text = f"[Вход: {input_tokens:,} | Выход: {output_tokens:,}]"
+            token_label = QLabel(token_text)
             token_label.setStyleSheet("""
                 QLabel {
                     color: #888;
@@ -291,16 +332,26 @@ class ChatWidget(QWidget):
             self.input_field.clear()
             self.message_sent.emit(text)
 
-    def add_user_message(self, text: str, images: Optional[list[str]] = None):
-        """Add a user message to the chat."""
+    def add_user_message(self, text: str, images: Optional[list[str]] = None,
+                         input_tokens: int = 0):
+        """Add a user message to the chat.
+
+        Args:
+            text: Message text.
+            images: Optional list of image paths.
+            input_tokens: Real input token count from API (0 to estimate locally).
+        """
         # Remove stretch before adding
         self._remove_stretch()
 
-        # Count tokens for the message
-        token_count = count_tokens(text)
+        # Use provided tokens or estimate locally
+        if input_tokens > 0:
+            token_count = input_tokens
+        else:
+            token_count = count_tokens(text)
         self._total_input_tokens += token_count
 
-        bubble = MessageBubble(text, is_user=True, images=images, token_count=token_count)
+        bubble = MessageBubble(text, is_user=True, images=images, input_tokens=token_count)
         bubble.thumbnail_clicked.connect(self._open_image_viewer)
         self.messages_layout.addWidget(bubble)
 
@@ -317,21 +368,37 @@ class ChatWidget(QWidget):
         self.messages_layout.addStretch()
         self._scroll_to_bottom()
 
-    def add_model_message(self, text: str, thoughts: Optional[str] = None, images: Optional[list[str]] = None):
-        """Add a model message to the chat."""
+    def add_model_message(self, text: str, thoughts: Optional[str] = None,
+                          images: Optional[list[str]] = None,
+                          input_tokens: int = 0, output_tokens: int = 0):
+        """Add a model message to the chat.
+
+        Args:
+            text: Message text.
+            thoughts: Optional model thinking text.
+            images: Optional list of image paths.
+            input_tokens: Real input token count from API.
+            output_tokens: Real output token count from API (0 to estimate locally).
+        """
         self._remove_stretch()
 
         # Show thoughts first if available
         if thoughts:
             self._add_thoughts_bubble(thoughts)
 
-        # Count tokens for the response
-        token_count = count_tokens(text)
-        if thoughts:
-            token_count += count_tokens(thoughts)
+        # Use provided tokens or estimate locally
+        if output_tokens > 0:
+            token_count = output_tokens
+        else:
+            token_count = count_tokens(text)
+            if thoughts:
+                token_count += count_tokens(thoughts)
+
+        self._total_input_tokens += input_tokens
         self._total_output_tokens += token_count
 
-        bubble = MessageBubble(text, is_user=False, images=images, token_count=token_count)
+        bubble = MessageBubble(text, is_user=False, images=images,
+                               input_tokens=input_tokens, output_tokens=token_count)
         bubble.thumbnail_clicked.connect(self._open_image_viewer)
         self.messages_layout.addWidget(bubble)
 
@@ -417,7 +484,7 @@ class ChatWidget(QWidget):
             images_layout = QHBoxLayout()
             images_layout.setSpacing(4)
             for img_path in image_paths[:5]:  # Limit to 5 thumbnails
-                thumb = ImageThumbnail(img_path, 60)
+                thumb = ImageThumbnail(img_path, 120)
                 thumb.clicked.connect(self._open_image_viewer)
                 images_layout.addWidget(thumb)
             images_layout.addStretch()
@@ -455,7 +522,9 @@ class ChatWidget(QWidget):
         answer_text: str,
         citations: list[dict],
         confidence: str = "medium",
-        thoughts: Optional[str] = None
+        thoughts: Optional[str] = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0
     ):
         """Add an answer message with citations block.
 
@@ -464,8 +533,15 @@ class ChatWidget(QWidget):
             citations: List of citation dicts with keys: kind, id, page, note.
             confidence: Confidence level (high, medium, low).
             thoughts: Optional model thoughts to display.
+            input_tokens: Real input token count from API.
+            output_tokens: Real output token count from API.
         """
         self._remove_stretch()
+
+        # Update token stats
+        self._total_input_tokens += input_tokens
+        self._total_output_tokens += output_tokens
+        self._update_token_stats()
 
         # Show thoughts first if available
         if thoughts:
@@ -485,12 +561,14 @@ class ChatWidget(QWidget):
         answer_layout.setContentsMargins(10, 8, 10, 8)
         answer_layout.setSpacing(6)
 
-        # Answer text
-        answer_label = QLabel(answer_text)
+        # Answer text with Markdown rendering
+        answer_label = QLabel()
         answer_label.setWordWrap(True)
         answer_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         answer_label.setStyleSheet("color: #eceff1;")
         answer_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        answer_label.setTextFormat(Qt.TextFormat.RichText)
+        answer_label.setText(_render_markdown(answer_text))
         answer_layout.addWidget(answer_label)
 
         # Confidence indicator
@@ -508,6 +586,20 @@ class ChatWidget(QWidget):
             }}
         """)
         answer_layout.addWidget(confidence_label)
+
+        # Token count label
+        if input_tokens > 0 or output_tokens > 0:
+            token_text = f"[Вход: {input_tokens:,} | Выход: {output_tokens:,}]"
+            token_label = QLabel(token_text)
+            token_label.setStyleSheet("""
+                QLabel {
+                    color: #888;
+                    font-size: 10px;
+                    font-style: italic;
+                }
+            """)
+            token_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            answer_layout.addWidget(token_label)
 
         self.messages_layout.addWidget(answer_frame)
 

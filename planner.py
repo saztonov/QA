@@ -238,8 +238,8 @@ class Planner:
                 user_requests=[]
             )
 
-    def plan_with_raw_response(self, question: str) -> tuple[Plan, str]:
-        """Create a plan and return both parsed Plan and raw response.
+    def plan_with_raw_response(self, question: str) -> tuple[Plan, str, dict]:
+        """Create a plan and return parsed Plan, raw response, and usage metadata.
 
         Useful for logging and debugging.
 
@@ -247,7 +247,8 @@ class Planner:
             question: User's question to analyze.
 
         Returns:
-            Tuple of (Plan object, raw JSON response string).
+            Tuple of (Plan object, raw JSON response string, usage dict).
+            Usage dict contains: input_tokens, output_tokens, total_tokens, thoughts_tokens
         """
         system_prompt = self._build_system_prompt()
 
@@ -258,9 +259,22 @@ class Planner:
             max_output_tokens=2048,
             response_mime_type="application/json",
             response_schema=PLAN_JSON_SCHEMA,
+            # Enable thinking mode for better reasoning
+            thinking_config=types.ThinkingConfig(
+                include_thoughts=True,
+                thinking_level="medium",  # Flash - balance of speed and quality
+            ),
         )
 
         user_prompt = f"Вопрос пользователя: {question}"
+
+        # Initialize usage dict
+        usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "thoughts_tokens": 0,
+        }
 
         try:
             response = self.client.models.generate_content(
@@ -269,11 +283,19 @@ class Planner:
                 config=gen_config,
             )
 
+            # Extract usage metadata
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage["input_tokens"] = response.usage_metadata.prompt_token_count or 0
+                usage["output_tokens"] = response.usage_metadata.candidates_token_count or 0
+                usage["total_tokens"] = response.usage_metadata.total_token_count or 0
+                if hasattr(response.usage_metadata, 'thoughts_token_count'):
+                    usage["thoughts_tokens"] = response.usage_metadata.thoughts_token_count or 0
+
             response_text = response.text.strip()
             plan_dict = json.loads(response_text)
             plan = Plan.model_validate(plan_dict)
 
-            return plan, response_text
+            return plan, response_text, usage
 
         except Exception as e:
             fallback_plan = Plan(
@@ -284,7 +306,7 @@ class Planner:
                 user_requests=[]
             )
             fallback_json = fallback_plan.model_dump_json(indent=2)
-            return fallback_plan, fallback_json
+            return fallback_plan, fallback_json, usage
 
     def get_context_stats(self) -> dict:
         """Get statistics about the context being sent.

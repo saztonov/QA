@@ -42,6 +42,7 @@ from evidence import EvidenceManager
 from conversation_memory import ConversationMemory
 from summarizer import Summarizer
 from block_indexer import BlockIndexer, BlockIndex, load_block_index
+from thinking_context import ThinkingContext
 from workers import (
     SendMessageWorker,
     SendFilesWorker,
@@ -75,6 +76,9 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         # Initialize conversation memory (stores last N text turns + summary)
         self.conversation_memory = ConversationMemory(max_turns=10)
 
+        # Initialize thinking context for thought signatures continuity
+        self.thinking_context = ThinkingContext()
+
         # Initialize summarizer for compressing conversation history
         self.summarizer = Summarizer(config)
         self.summarizer_worker: Optional[SummarizerWorker] = None
@@ -83,8 +87,12 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         self.planner = Planner(config, conversation_memory=self.conversation_memory)
         self.use_planner = True  # Can be toggled via settings if needed
 
-        # Initialize answerer for structured answers
-        self.answerer = Answerer(config, conversation_memory=self.conversation_memory)
+        # Initialize answerer for structured answers with thinking context
+        self.answerer = Answerer(
+            config,
+            conversation_memory=self.conversation_memory,
+            thinking_context=self.thinking_context
+        )
 
         # Initialize evidence manager for ROI rendering
         self.evidence_manager = EvidenceManager()
@@ -566,8 +574,9 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         self.chat_widget.clear_chat()
         self.api_log_widget.log_new_chat()
 
-        # Clear conversation memory
+        # Clear conversation memory and thinking context
         self.conversation_memory.clear()
+        self.thinking_context.clear()
 
         # Show document status
         if self.document_parser:
