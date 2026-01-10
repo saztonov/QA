@@ -1,4 +1,10 @@
-"""API Log widget for displaying JSON logs of model interactions."""
+"""API Log widget for displaying JSON logs of model interactions.
+
+Features:
+- JSON syntax highlighting
+- Auto-rotation at MAX_LOG_ENTRIES to prevent UI slowdown
+- Export to file functionality
+"""
 
 import json
 import os
@@ -82,11 +88,20 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
 
 
 class ApiLogWidget(QWidget):
-    """Widget for displaying API interaction logs in JSON format."""
+    """Widget for displaying API interaction logs in JSON format.
+
+    Features:
+    - Auto-rotation: When log exceeds MAX_LOG_ENTRIES, oldest entries are removed
+    - Rotated entries are stored in _rotated_count for statistics
+    """
+
+    MAX_LOG_ENTRIES = 1000  # Limit to prevent UI slowdown
+    ROTATION_BATCH_SIZE = 100  # Number of entries to remove on rotation
 
     def __init__(self):
         super().__init__()
         self.log_entries: list[dict] = []
+        self._rotated_count = 0  # Track total rotated entries
         self._setup_ui()
 
     def _setup_ui(self):
@@ -207,13 +222,22 @@ class ApiLogWidget(QWidget):
         layout.addWidget(self.stats_label)
 
     def add_log_entry(self, entry_type: str, data: dict) -> None:
-        """Add a new log entry."""
+        """Add a new log entry with automatic rotation.
+
+        When log exceeds MAX_LOG_ENTRIES, oldest entries are removed
+        in batches of ROTATION_BATCH_SIZE to prevent frequent rotations.
+        """
         entry = {
             "timestamp": datetime.now().isoformat(),
             "type": entry_type,
             "data": data
         }
         self.log_entries.append(entry)
+
+        # Perform rotation if exceeded limit
+        if len(self.log_entries) > self.MAX_LOG_ENTRIES:
+            self._rotate_log()
+
         self._update_display()
 
     def log_request(self, text: str, images: list[str] = None, files: list[str] = None, model: str = None) -> None:
@@ -307,6 +331,365 @@ class ApiLogWidget(QWidget):
         }
         self.add_log_entry("CROPS_LOADED", data)
 
+    def log_plan_request(
+        self,
+        question: str,
+        model: str = "gemini-3-flash-preview",
+        context_stats: dict = None,
+    ) -> None:
+        """Log a planning request to Flash model.
+
+        Args:
+            question: The user's question.
+            model: Model name being used.
+            context_stats: Optional context statistics from planner.
+        """
+        data = {
+            "model": model,
+            "question": question[:500] + "..." if len(question) > 500 else question,
+            "question_length": len(question),
+            "stage": "planning",
+        }
+
+        # Add context stats if provided
+        if context_stats:
+            data["context"] = {
+                "system_prompt_length": context_stats.get("system_prompt_length", 0),
+                "estimated_tokens": context_stats.get("estimated_tokens", 0),
+                "conversation_turns": context_stats.get("conversation_turns", 0),
+                "has_summary": context_stats.get("has_summary", False),
+            }
+
+        self.add_log_entry("PLAN_REQUEST", data)
+
+    def log_plan_response(self, plan_data: dict, raw_json: str = None) -> None:
+        """Log planning response from Flash model.
+
+        Args:
+            plan_data: Dictionary with plan details (decision, reasoning, blocks, etc.)
+            raw_json: Optional raw JSON response for debugging.
+        """
+        data = {
+            "decision": plan_data.get("decision", "unknown"),
+            "reasoning": plan_data.get("reasoning", "")[:300],
+            "requested_blocks_count": len(plan_data.get("requested_blocks", [])),
+            "requested_rois_count": len(plan_data.get("requested_rois", [])),
+            "user_requests_count": len(plan_data.get("user_requests", [])),
+            "stage": "planning",
+        }
+
+        # Add block details if present
+        if plan_data.get("requested_blocks"):
+            data["requested_blocks"] = [
+                {
+                    "block_id": b.get("block_id"),
+                    "priority": b.get("priority"),
+                    "reason": b.get("reason", "")[:100]
+                }
+                for b in plan_data["requested_blocks"][:5]  # Limit to 5 for readability
+            ]
+
+        # Add ROI details if present
+        if plan_data.get("requested_rois"):
+            data["requested_rois"] = [
+                {
+                    "block_id": r.get("block_id"),
+                    "page": r.get("page"),
+                    "dpi": r.get("dpi"),
+                }
+                for r in plan_data["requested_rois"][:3]  # Limit to 3
+            ]
+
+        # Add user requests if present
+        if plan_data.get("user_requests"):
+            data["user_requests"] = [
+                {
+                    "kind": u.get("kind"),
+                    "text": u.get("text", "")[:100]
+                }
+                for u in plan_data["user_requests"][:3]
+            ]
+
+        if raw_json:
+            data["raw_json_length"] = len(raw_json)
+
+        self.add_log_entry("PLAN_RESPONSE", data)
+
+    def log_rois_rendered(self, rois_info: list[dict], crop_paths: list[str]) -> None:
+        """Log ROI rendering and cropping.
+
+        Args:
+            rois_info: List of ROI details [{block_id, page, bbox, dpi}, ...]
+            crop_paths: List of paths to rendered crop files.
+        """
+        data = {
+            "rois_count": len(rois_info),
+            "crops_count": len(crop_paths),
+            "rois": [
+                {
+                    "block_id": r.get("block_id"),
+                    "page": r.get("page"),
+                    "dpi": r.get("dpi"),
+                    "bbox": r.get("bbox"),
+                }
+                for r in rois_info[:5]  # Limit to 5 for readability
+            ],
+            "crop_files": [os.path.basename(p) for p in crop_paths[:5]],
+            "total_crops_size_kb": sum(
+                os.path.getsize(p) for p in crop_paths if os.path.exists(p)
+            ) // 1024,
+        }
+        self.add_log_entry("ROIS_RENDERED", data)
+
+    def log_evidence_sent(self, evidence_paths: list[str], evidence_type: str = "crops") -> None:
+        """Log evidence images being sent to model.
+
+        Args:
+            evidence_paths: List of paths to evidence images.
+            evidence_type: Type of evidence (crops, full_pages, mixed).
+        """
+        data = {
+            "evidence_type": evidence_type,
+            "files_count": len(evidence_paths),
+            "files": [os.path.basename(p) for p in evidence_paths[:10]],
+            "total_size_kb": sum(
+                os.path.getsize(p) for p in evidence_paths if os.path.exists(p)
+            ) // 1024,
+        }
+        self.add_log_entry("EVIDENCE_SENT", data)
+
+    def log_answer_request(
+        self,
+        question: str,
+        model: str = "gemini-3-pro-preview",
+        iteration: int = 1,
+        images_count: int = 0,
+        files_count: int = 0,
+        context_stats: dict = None,
+    ) -> None:
+        """Log an answer request to Pro model.
+
+        Args:
+            question: The user's question.
+            model: Model name being used.
+            iteration: Current iteration number.
+            images_count: Number of images being sent.
+            files_count: Number of files being sent.
+            context_stats: Optional context statistics from answerer.
+        """
+        data = {
+            "model": model,
+            "question": question[:500] + "..." if len(question) > 500 else question,
+            "question_length": len(question),
+            "iteration": iteration,
+            "images_count": images_count,
+            "files_count": files_count,
+            "stage": "answering",
+        }
+
+        # Add context stats if provided
+        if context_stats:
+            data["context"] = {
+                "system_prompt_length": context_stats.get("system_prompt_length", 0),
+                "estimated_text_tokens": context_stats.get("estimated_text_tokens", 0),
+                "media_resolution": context_stats.get("media_resolution", ""),
+                "conversation_turns": context_stats.get("conversation_turns", 0),
+                "total_media_size_kb": context_stats.get("total_media_size_kb", 0),
+            }
+            # Add media file details if present
+            if context_stats.get("media_files"):
+                data["media_files"] = context_stats["media_files"][:10]  # Limit to 10
+
+        self.add_log_entry("ANSWER_REQUEST", data)
+
+    def log_answer_response(
+        self,
+        answer_data: dict,
+        raw_json: str = None,
+        iteration: int = 1
+    ) -> None:
+        """Log answer response from Pro model.
+
+        Args:
+            answer_data: Dictionary with answer details.
+            raw_json: Optional raw JSON response.
+            iteration: Current iteration number.
+        """
+        data = {
+            "iteration": iteration,
+            "confidence": answer_data.get("confidence", "unknown"),
+            "answer_length": len(answer_data.get("answer_markdown", "")),
+            "answer_preview": answer_data.get("answer_markdown", "")[:300] + "...",
+            "citations_count": len(answer_data.get("citations", [])),
+            "needs_more_evidence": answer_data.get("needs_more_evidence", False),
+            "followup_blocks_count": len(answer_data.get("followup_blocks", [])),
+            "followup_rois_count": len(answer_data.get("followup_rois", [])),
+            "stage": "answering",
+        }
+
+        # Add citation details
+        if answer_data.get("citations"):
+            data["citations"] = [
+                {
+                    "kind": c.get("kind"),
+                    "id": c.get("id"),
+                    "page": c.get("page"),
+                }
+                for c in answer_data["citations"][:5]
+            ]
+
+        # Add followup details if needs more evidence
+        if answer_data.get("needs_more_evidence"):
+            if answer_data.get("followup_blocks"):
+                data["followup_blocks"] = [
+                    {"block_id": b.get("block_id"), "reason": b.get("reason", "")[:50]}
+                    for b in answer_data["followup_blocks"][:3]
+                ]
+            if answer_data.get("followup_rois"):
+                data["followup_rois"] = [
+                    {"block_id": r.get("block_id"), "page": r.get("page")}
+                    for r in answer_data["followup_rois"][:3]
+                ]
+
+        if raw_json:
+            data["raw_json_length"] = len(raw_json)
+
+        self.add_log_entry("ANSWER_RESPONSE", data)
+
+    def log_summary_update(
+        self,
+        old_summary_length: int,
+        new_summary_length: int,
+        turns_summarized: int,
+    ) -> None:
+        """Log conversation summary update.
+
+        Args:
+            old_summary_length: Length of previous summary.
+            new_summary_length: Length of new summary.
+            turns_summarized: Number of turns that were summarized.
+        """
+        data = {
+            "old_summary_length": old_summary_length,
+            "new_summary_length": new_summary_length,
+            "turns_summarized": turns_summarized,
+            "model": "gemini-3-flash-preview",
+        }
+        self.add_log_entry("SUMMARY_UPDATE", data)
+
+    def log_conversation_memory_state(self, memory_stats: dict) -> None:
+        """Log current state of conversation memory.
+
+        Args:
+            memory_stats: Statistics from ConversationMemory.get_stats().
+        """
+        data = {
+            "turns_count": memory_stats.get("turns_count", 0),
+            "max_turns": memory_stats.get("max_turns", 0),
+            "summary_length": memory_stats.get("summary_length", 0),
+            "total_text_length": memory_stats.get("total_text_length", 0),
+            "estimated_tokens": memory_stats.get("estimated_tokens", 0),
+            "has_summary": memory_stats.get("has_summary", False),
+        }
+        self.add_log_entry("CONVERSATION_MEMORY", data)
+
+    def log_indexing_start(self, crops_dir: str, total_blocks: int) -> None:
+        """Log start of block indexing.
+
+        Args:
+            crops_dir: Directory being indexed.
+            total_blocks: Total number of blocks to index.
+        """
+        data = {
+            "crops_dir": os.path.basename(crops_dir),
+            "total_blocks": total_blocks,
+            "status": "started",
+        }
+        self.add_log_entry("INDEXING_START", data)
+
+    def log_indexing_progress(
+        self,
+        indexed: int,
+        total: int,
+        current_blocks: str,
+    ) -> None:
+        """Log indexing progress.
+
+        Args:
+            indexed: Number of blocks indexed so far.
+            total: Total number of blocks.
+            current_blocks: IDs of blocks being indexed.
+        """
+        data = {
+            "indexed": indexed,
+            "total": total,
+            "progress_percent": round(indexed / total * 100, 1) if total > 0 else 0,
+            "current": current_blocks,
+        }
+        self.add_log_entry("INDEXING_PROGRESS", data)
+
+    def log_indexing_error(self, block_ids: str, error: str) -> None:
+        """Log indexing error for specific blocks.
+
+        Args:
+            block_ids: IDs of blocks that failed.
+            error: Error message.
+        """
+        data = {
+            "block_ids": block_ids,
+            "error": error,
+        }
+        self.add_log_entry("INDEXING_ERROR", data)
+
+    def log_indexing_complete(
+        self,
+        total_blocks: int,
+        indexed_blocks: int,
+        failed_blocks: int,
+        output_path: str,
+    ) -> None:
+        """Log completion of block indexing.
+
+        Args:
+            total_blocks: Total number of blocks.
+            indexed_blocks: Number successfully indexed.
+            failed_blocks: Number that failed.
+            output_path: Path where index was saved.
+        """
+        data = {
+            "total_blocks": total_blocks,
+            "indexed_blocks": indexed_blocks,
+            "failed_blocks": failed_blocks,
+            "success_rate": round(indexed_blocks / total_blocks * 100, 1) if total_blocks > 0 else 0,
+            "output_path": os.path.basename(output_path),
+            "status": "complete",
+        }
+        self.add_log_entry("INDEXING_COMPLETE", data)
+
+    def _rotate_log(self) -> None:
+        """Remove oldest entries when log exceeds MAX_LOG_ENTRIES.
+
+        Removes ROTATION_BATCH_SIZE entries at once to avoid frequent rotations.
+        Adds a rotation marker entry to indicate when rotation occurred.
+        """
+        to_remove = self.ROTATION_BATCH_SIZE
+        self._rotated_count += to_remove
+
+        # Remove oldest entries
+        del self.log_entries[:to_remove]
+
+        # Add rotation marker
+        rotation_marker = {
+            "timestamp": datetime.now().isoformat(),
+            "type": "LOG_ROTATION",
+            "data": {
+                "message": f"Removed {to_remove} oldest entries",
+                "total_rotated": self._rotated_count,
+                "remaining_entries": len(self.log_entries),
+            }
+        }
+        self.log_entries.insert(0, rotation_marker)
+
     def _update_display(self) -> None:
         """Update the display with current log entries."""
         # Format as pretty JSON
@@ -317,12 +700,16 @@ class ApiLogWidget(QWidget):
         scrollbar = self.log_display.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
-        # Update stats
-        self.stats_label.setText(f"Entries: {len(self.log_entries)}")
+        # Update stats with rotation info
+        stats_text = f"Entries: {len(self.log_entries)}"
+        if self._rotated_count > 0:
+            stats_text += f" ({self._rotated_count} rotated)"
+        self.stats_label.setText(stats_text)
 
     def clear_log(self) -> None:
-        """Clear all log entries."""
+        """Clear all log entries and reset rotation counter."""
         self.log_entries.clear()
+        self._rotated_count = 0
         self._update_display()
 
     def download_log(self) -> None:
@@ -341,7 +728,3 @@ class ApiLogWidget(QWidget):
         if file_path:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.log_entries, f, indent=2, ensure_ascii=False)
-
-    def get_log_data(self) -> list[dict]:
-        """Get all log entries."""
-        return self.log_entries.copy()

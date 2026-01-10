@@ -63,22 +63,3 @@ class PromptBuilder:
     def build_user_prompt(self, user_question: str) -> str:
         """Build user prompt with the question."""
         return f"Вопрос пользователя: {user_question}"
-
-    def build_image_follow_up_prompt(self, block_ids: list[str]) -> str:
-        """Build prompt for sending images to the model."""
-        blocks_info = []
-        for block_id in block_ids:
-            block = self.parser.get_image_block(block_id)
-            if block:
-                info = f"- {block_id}: {block.short_description}"
-                if block.block_type:
-                    info += f" (Тип: {block.block_type})"
-                blocks_info.append(info)
-
-        blocks_str = "\n".join(blocks_info) if blocks_info else "Запрошенные блоки"
-
-        return f"""Вот запрошенные графические блоки:
-
-{blocks_str}
-
-Проанализируй эти изображения и дай полный ответ на вопрос пользователя."""

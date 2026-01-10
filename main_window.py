@@ -1,6 +1,7 @@
 """Main window for Gemini Chat application."""
 
 import os
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -31,64 +32,32 @@ from prompt_builder import PromptBuilder
 from block_manager import BlockManager
 from api_log_widget import ApiLogWidget
 from model_settings_widget import ModelSettingsWidget, GenerationConfig
+from planner import Planner
+from answerer import Answerer
+from schemas import (
+    Plan, PlanDecision, RequestedROI, Answer,
+    FollowupBlock, FollowupROI, BBoxNorm
+)
+from evidence import EvidenceManager
+from conversation_memory import ConversationMemory
+from summarizer import Summarizer
+from block_indexer import BlockIndexer, BlockIndex, load_block_index
+from workers import (
+    SendMessageWorker,
+    SendFilesWorker,
+    SendImagesWorker,
+    PlanWorker,
+    AnswerWorker,
+    SummarizerWorker,
+    IndexWorker,
+)
+from handlers import MainWindowHandlers
 
 
-class WorkerSignals(QObject):
-    """Signals for worker thread."""
-
-    finished = Signal(object)  # ModelResponse
-    error = Signal(str)
-
-
-class SendMessageWorker(QThread):
-    """Worker thread for sending messages to Gemini."""
-
-    def __init__(
-        self,
-        client: GeminiClient,
-        text: str,
-        images: Optional[list[str]] = None,
-        files: Optional[list[str]] = None,
-    ):
-        super().__init__()
-        self.client = client
-        self.text = text
-        self.images = images
-        self.files = files
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            response = self.client.send_message(
-                text=self.text,
-                image_paths=self.images,
-                file_paths=self.files,
-            )
-            self.signals.finished.emit(response)
-        except Exception as e:
-            self.signals.error.emit(str(e))
-
-
-class SendFilesWorker(QThread):
-    """Worker thread for sending files (PDF blocks)."""
-
-    def __init__(self, client: GeminiClient, files: list[str], context: str = ""):
-        super().__init__()
-        self.client = client
-        self.files = files
-        self.context = context
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            response = self.client.send_files_only(self.files, self.context)
-            self.signals.finished.emit(response)
-        except Exception as e:
-            self.signals.error.emit(str(e))
-
-
-class MainWindow(QMainWindow):
+class MainWindow(MainWindowHandlers, QMainWindow):
     """Main application window."""
+
+    MAX_ANSWER_ITERATIONS = 3  # Maximum iterations for followup evidence
 
     def __init__(self, config: Config):
         super().__init__()
@@ -102,6 +71,40 @@ class MainWindow(QMainWindow):
         self.block_manager: Optional[BlockManager] = None
         self.loaded_document_path: Optional[str] = None
         self.loaded_crops_dir: Optional[str] = None
+
+        # Initialize conversation memory (stores last N text turns + summary)
+        self.conversation_memory = ConversationMemory(max_turns=10)
+
+        # Initialize summarizer for compressing conversation history
+        self.summarizer = Summarizer(config)
+        self.summarizer_worker: Optional[SummarizerWorker] = None
+
+        # Initialize planner for structured query planning
+        self.planner = Planner(config, conversation_memory=self.conversation_memory)
+        self.use_planner = True  # Can be toggled via settings if needed
+
+        # Initialize answerer for structured answers
+        self.answerer = Answerer(config, conversation_memory=self.conversation_memory)
+
+        # Initialize evidence manager for ROI rendering
+        self.evidence_manager = EvidenceManager()
+
+        # Initialize block indexer
+        self.block_indexer = BlockIndexer(config)
+        self.block_index: Optional[BlockIndex] = None
+        self.index_worker: Optional[IndexWorker] = None
+
+        # Current generation settings
+        self._current_media_resolution = "MEDIA_RESOLUTION_MEDIUM"
+
+        # Current query state for iterative answering
+        self._current_question: Optional[str] = None
+        self._current_iteration: int = 0
+        self._accumulated_evidence_paths: list[str] = []
+        self._accumulated_file_paths: list[str] = []
+
+        # Pending user ROI (selected via ImageViewer before asking a question)
+        self._pending_user_roi: Optional[dict] = None
 
         self._setup_ui()
         self._connect_signals()
@@ -128,6 +131,10 @@ class MainWindow(QMainWindow):
             # Set system prompt for the Gemini client
             system_prompt = self.prompt_builder.build_system_prompt()
             self.gemini_client.set_system_prompt(system_prompt)
+
+            # Update planner and answerer with document parser
+            self.planner.set_parser(self.document_parser)
+            self.answerer.set_parser(self.document_parser)
 
             self.loaded_document_path = document_path
             self.loaded_crops_dir = crops_dir
@@ -337,6 +344,36 @@ class MainWindow(QMainWindow):
         docs_buttons.addWidget(remove_doc_btn)
         docs_layout.addLayout(docs_buttons)
 
+        # Block index section
+        self.index_status_label = QLabel("Индекс блоков: не создан")
+        self.index_status_label.setStyleSheet("color: #888; font-size: 11px; padding: 4px;")
+        docs_layout.addWidget(self.index_status_label)
+
+        self.build_index_btn = QPushButton("Построить индекс блоков")
+        self.build_index_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0d47a1;
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1565c0;
+            }
+            QPushButton:pressed {
+                background-color: #0a3d91;
+            }
+            QPushButton:disabled {
+                background-color: #555;
+                color: #888;
+            }
+        """)
+        self.build_index_btn.clicked.connect(self._build_block_index)
+        self.build_index_btn.setEnabled(False)  # Enabled when crops folder is loaded
+        docs_layout.addWidget(self.build_index_btn)
+
         layout.addWidget(docs_group)
 
         # Actions
@@ -462,6 +499,10 @@ class MainWindow(QMainWindow):
                 # Log crops loaded
                 self.api_log_widget.log_crops_loaded(directory)
 
+                # Enable index button and try to load existing index
+                self.build_index_btn.setEnabled(True)
+                self._try_load_existing_index(directory)
+
     def _remove_document(self) -> None:
         """Remove selected document or crops folder."""
         current = self.docs_list.currentItem()
@@ -481,6 +522,9 @@ class MainWindow(QMainWindow):
             # Remove crops folder
             self.loaded_crops_dir = None
             self.block_manager = None
+            self.block_index = None
+            self.build_index_btn.setEnabled(False)
+            self._update_index_status()
             self.chat_widget.add_system_message("Папка кропов удалена")
 
         self._update_docs_list()
@@ -489,6 +533,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         """Connect signals."""
         self.chat_widget.message_sent.connect(self._on_message_sent)
+        self.chat_widget.roi_selected.connect(self._on_user_roi_selected)
 
     def _on_model_changed(self, model: str):
         """Handle model change."""
@@ -499,6 +544,11 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self, config: GenerationConfig):
         """Handle generation settings change."""
         self.gemini_client.set_generation_config(config)
+
+        # Update media resolution for answerer
+        self._current_media_resolution = config.media_resolution
+        self.answerer.set_media_resolution(config.media_resolution)
+
         # Log settings change
         self.api_log_widget.add_log_entry("SETTINGS_CHANGE", {
             "temperature": config.temperature,
@@ -516,6 +566,9 @@ class MainWindow(QMainWindow):
         self.chat_widget.clear_chat()
         self.api_log_widget.log_new_chat()
 
+        # Clear conversation memory
+        self.conversation_memory.clear()
+
         # Show document status
         if self.document_parser:
             doc_data = self.document_parser.parse()
@@ -531,102 +584,90 @@ class MainWindow(QMainWindow):
         # Show user message in chat
         self.chat_widget.add_user_message(text)
 
-        # Log the request
-        self.api_log_widget.log_request(
-            text=text,
-            model=self.gemini_client.current_model
-        )
-
         # Disable input while processing
         self.chat_widget.set_loading(True)
 
-        # Send to Gemini in background thread
-        self.current_worker = SendMessageWorker(
-            self.gemini_client, text
-        )
-        self.current_worker.signals.finished.connect(self._on_response_received)
-        self.current_worker.signals.error.connect(self._on_error)
-        self.current_worker.start()
+        # Use planner if document is loaded and planner is enabled
+        if self.use_planner and self.document_parser:
+            # Get context stats for logging
+            context_stats = self.planner.get_context_stats()
 
-    def _on_response_received(self, response: ModelResponse):
-        """Handle response from Gemini."""
-        self.chat_widget.set_loading(False)
-        self.chat_widget.add_model_message(response.text, thoughts=response.thoughts)
-
-        # Log the response
-        self.api_log_widget.log_response(
-            text=response.text,
-            needs_blocks=response.needs_blocks,
-            needs_images=response.needs_images,
-            requested_blocks=response.requested_blocks if response.needs_blocks else None,
-            requested_images=response.requested_images if response.needs_images else None,
-            thoughts=response.thoughts
-        )
-
-        # Check if model is requesting document blocks (new flow)
-        # Check if model is requesting document blocks
-        if response.needs_blocks and response.requested_blocks:
-            requested_ids = [r.block_id for r in response.requested_blocks]
-            self.chat_widget.add_system_message(
-                f"Модель запрашивает блоки: {', '.join(requested_ids)}"
+            # Log planning request with context stats
+            self.api_log_widget.log_plan_request(
+                text,
+                model=Planner.MODEL_NAME,
+                context_stats=context_stats,
             )
-            self._send_requested_blocks(requested_ids)
+            self.chat_widget.add_system_message("Planning...")
 
-    def _send_requested_blocks(self, block_ids: list[str]) -> None:
-        """Send requested document blocks to the model."""
-        if not self.block_manager:
-            self.chat_widget.add_system_message(
-                "Система документов не инициализирована."
-            )
-            return
-
-        # Get file paths for requested blocks
-        found_paths, not_found_ids = self.block_manager.get_block_files_for_ids(block_ids)
-
-        if not_found_ids:
-            self.chat_widget.add_system_message(
-                f"Блоки не найдены: {', '.join(not_found_ids)}"
-            )
-
-        if found_paths:
-            # Build context message
-            block_descriptions = []
-            for block_id in block_ids:
-                if self.block_manager.is_block_available(block_id):
-                    desc = self.block_manager.get_block_description(block_id)
-                    block_descriptions.append(desc)
-
-            context = "Вот запрошенные графические блоки:\n" + "\n".join(
-                f"- {desc}" for desc in block_descriptions
-            ) + "\n\nПроанализируй эти изображения и дай полный ответ на вопрос пользователя."
-
-            # Show sent files in chat
-            self.chat_widget.add_sent_images_message(found_paths)
-            self._send_block_files(found_paths, context)
+            # Run planning in background
+            self.current_worker = PlanWorker(self.planner, text)
+            self.current_worker.signals.finished.connect(self._on_plan_received)
+            self.current_worker.signals.error.connect(self._on_plan_error)
+            self.current_worker.start()
         else:
-            self.chat_widget.add_system_message(
-                "Ни один из запрошенных блоков не найден."
+            # Direct send without planning (legacy flow)
+            self.api_log_widget.log_request(
+                text=text,
+                model=self.gemini_client.current_model
             )
+            self.current_worker = SendMessageWorker(
+                self.gemini_client, text
+            )
+            self.current_worker.signals.finished.connect(self._on_response_received)
+            self.current_worker.signals.error.connect(self._on_error)
+            self.current_worker.start()
 
-    def _send_block_files(self, file_paths: list[str], context: str = "") -> None:
-        """Send block files to the model."""
-        self.chat_widget.set_loading(True)
+    # =========================================================================
+    # Block Indexing Methods
+    # =========================================================================
 
-        # Log files being sent
-        self.api_log_widget.log_files_sent(file_paths, context)
+    def _get_output_dir(self) -> Path:
+        """Get or create output directory for index files."""
+        output_dir = Path(self.loaded_crops_dir).parent / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
 
-        self.current_worker = SendFilesWorker(
-            self.gemini_client,
-            file_paths,
-            context
-        )
-        self.current_worker.signals.finished.connect(self._on_response_received)
-        self.current_worker.signals.error.connect(self._on_error)
-        self.current_worker.start()
+    def _get_index_path(self) -> Path:
+        """Get path for block index file."""
+        return self._get_output_dir() / "block_index.json"
 
-    def _on_error(self, error: str):
-        """Handle error."""
-        self.chat_widget.set_loading(False)
-        self.chat_widget.add_system_message(f"Error: {error}")
-        self.api_log_widget.log_error(error)
-        QMessageBox.warning(self, "Error", error)
+    def _try_load_existing_index(self, crops_dir: str) -> None:
+        """Try to load existing block index from output directory.
+
+        Args:
+            crops_dir: Path to crops directory.
+        """
+        # Look for index in output folder (sibling to crops)
+        output_dir = Path(crops_dir).parent / "output"
+        index_path = output_dir / "block_index.json"
+
+        if index_path.exists():
+            self.block_index = load_block_index(index_path)
+            if self.block_index:
+                self._update_index_status()
+                # Update planner with index
+                self.planner.set_block_index(self.block_index)
+                self.chat_widget.add_system_message(
+                    f"Загружен индекс блоков: {self.block_index.indexed_blocks} блоков"
+                )
+
+    def _update_index_status(self) -> None:
+        """Update the index status label in UI."""
+        if self.block_index and self.block_index.indexed_blocks > 0:
+            total = self.block_index.total_blocks
+            indexed = self.block_index.indexed_blocks
+            failed = len(self.block_index.failed_blocks)
+
+            if failed > 0:
+                status = f"Индекс: {indexed}/{total} блоков ({failed} ошибок)"
+                self.index_status_label.setStyleSheet("color: #ffa726; font-size: 11px; padding: 4px;")
+            else:
+                status = f"Индекс: {indexed}/{total} блоков"
+                self.index_status_label.setStyleSheet("color: #4caf50; font-size: 11px; padding: 4px;")
+
+            self.index_status_label.setText(status)
+        else:
+            self.index_status_label.setText("Индекс блоков: не создан")
+            self.index_status_label.setStyleSheet("color: #888; font-size: 11px; padding: 4px;")
+

@@ -1,14 +1,20 @@
-"""Gemini API client module."""
+"""Gemini API client module.
 
+This module provides a client for interacting with the Gemini API
+using structured outputs (JSON Schema) for reliable parsing.
+"""
+
+import json
 import os
-import re
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
 
-from config import Config, get_mime_type
+from config import Config
+from schemas import ChatResponse, CHAT_RESPONSE_JSON_SCHEMA
+from file_utils import create_file_part, create_image_part
 
 if TYPE_CHECKING:
     from model_settings_widget import GenerationConfig
@@ -28,6 +34,7 @@ class BlockRequest:
 
     block_id: str
     block_type: str = "IMAGE"  # IMAGE or TEXT
+    reason: str = ""
 
 
 @dataclass
@@ -54,30 +61,14 @@ class ModelResponse:
 
 
 class GeminiClient:
-    """Client for interacting with Gemini API."""
-
-    # Patterns to detect image requests from model
-    IMAGE_REQUEST_PATTERNS = [
-        r"(?:please\s+)?(?:provide|show|send|upload|share|attach)\s+(?:me\s+)?(?:the\s+)?(?:image|photo|picture|screenshot|file)s?\s*(?:of|for|named|called)?\s*[:\-]?\s*[\"']?([^\n\"']+)[\"']?",
-        r"(?:I\s+)?need\s+(?:to\s+see\s+)?(?:the\s+)?(?:image|photo|picture|screenshot)s?\s*(?:of|for|named|called)?\s*[:\-]?\s*[\"']?([^\n\"']+)[\"']?",
-        r"(?:can\s+you\s+)?(?:please\s+)?(?:show|send|provide)\s+[\"']?([^\n\"']+)[\"']?\s*(?:image|photo|picture)?",
-        r"\[REQUEST_IMAGE:\s*([^\]]+)\]",
-        r"\[НУЖНО_ИЗОБРАЖЕНИЕ:\s*([^\]]+)\]",
-        r"мне\s+нужн[оа]\s+(?:изображение|картинка|фото)\s*[:\-]?\s*[\"']?([^\n\"']+)[\"']?",
-        r"(?:пожалуйста\s+)?(?:предоставьте|покажите|пришлите|загрузите)\s+(?:изображение|картинку|фото)\s*[:\-]?\s*[\"']?([^\n\"']+)[\"']?",
-    ]
-
-    # Pattern to detect block requests from model
-    BLOCK_REQUEST_PATTERN = re.compile(
-        r"\[ЗАПРОС_БЛОКОВ\](.*?)\[/ЗАПРОС_БЛОКОВ\]",
-        re.DOTALL
-    )
-    BLOCK_ID_PATTERN = re.compile(
-        r"###\s*BLOCK\s*\[IMAGE\]:\s*([A-Z0-9\-]+)"
-    )
+    """Client for interacting with Gemini API using structured JSON Schema outputs."""
 
     def __init__(self, config: Config):
-        """Initialize Gemini client."""
+        """Initialize Gemini client.
+
+        Args:
+            config: Application configuration with API key.
+        """
         self.config = config
         self.client = genai.Client(api_key=config.api_key)
         self.chat: Optional[genai.chats.Chat] = None
@@ -101,6 +92,74 @@ class GeminiClient:
         if model_name in self.config.available_models:
             self.current_model = model_name
             self.chat = None  # Reset chat when model changes
+
+    def _parse_structured_response(self, response_text: str) -> ChatResponse:
+        """Parse a JSON response into ChatResponse.
+
+        Args:
+            response_text: The raw JSON text from the model.
+
+        Returns:
+            ChatResponse object with parsed data.
+        """
+        try:
+            response_dict = json.loads(response_text)
+            return ChatResponse.model_validate(response_dict)
+        except (json.JSONDecodeError, Exception):
+            # Fallback: treat the whole response as text
+            return ChatResponse(
+                response_text=response_text,
+                needs_blocks=False,
+                requested_blocks=[],
+                needs_images=False,
+                requested_images=[],
+                is_complete=True,
+            )
+
+    def _convert_to_model_response(
+        self,
+        chat_response: ChatResponse,
+        thoughts: Optional[str] = None,
+    ) -> ModelResponse:
+        """Convert ChatResponse to ModelResponse.
+
+        Args:
+            chat_response: The parsed ChatResponse object.
+            thoughts: Optional thinking/reasoning from the model.
+
+        Returns:
+            ModelResponse object.
+        """
+        # Convert block requests
+        requested_blocks = [
+            BlockRequest(
+                block_id=br.block_id,
+                block_type=br.block_type,
+                reason=br.reason,
+            )
+            for br in chat_response.requested_blocks
+        ]
+
+        # Convert image requests
+        requested_images = [
+            ImageRequest(
+                filename=ir.filename,
+                description=ir.description,
+            )
+            for ir in chat_response.requested_images
+        ]
+
+        is_final = not chat_response.needs_blocks and not chat_response.needs_images
+
+        return ModelResponse(
+            text=chat_response.response_text,
+            thoughts=thoughts,
+            needs_images=chat_response.needs_images,
+            requested_images=requested_images,
+            needs_blocks=chat_response.needs_blocks,
+            requested_blocks=requested_blocks,
+            is_final=is_final,
+        )
 
     def start_new_chat(self) -> None:
         """Start a new chat session."""
@@ -129,85 +188,15 @@ class GeminiClient:
             if self.generation_config.media_resolution:
                 gen_config_kwargs["media_resolution"] = self.generation_config.media_resolution
 
-            # Thinking mode configuration
-            if self.generation_config.include_thoughts:
-                gen_config_kwargs["thinking_config"] = types.ThinkingConfig(
-                    include_thoughts=True,
-                    thinking_budget=self.generation_config.thinking_budget
-                )
+        # Add JSON Schema for structured output
+        gen_config_kwargs["response_mime_type"] = "application/json"
+        gen_config_kwargs["response_schema"] = CHAT_RESPONSE_JSON_SCHEMA
 
         if gen_config_kwargs:
             config_dict["config"] = types.GenerateContentConfig(**gen_config_kwargs)
 
         self.chat = self.client.chats.create(**config_dict)
         self.history.clear()
-
-    def _parse_block_requests(self, text: str) -> list[BlockRequest]:
-        """Parse model response for block requests."""
-        blocks = []
-
-        # Find the block request section
-        match = self.BLOCK_REQUEST_PATTERN.search(text)
-        if match:
-            block_section = match.group(1)
-            # Find all block IDs in the section
-            block_ids = self.BLOCK_ID_PATTERN.findall(block_section)
-            for block_id in block_ids:
-                blocks.append(BlockRequest(block_id=block_id.strip(), block_type="IMAGE"))
-
-        return blocks
-
-    def _check_for_block_requests(self, text: str) -> tuple[bool, list[BlockRequest]]:
-        """Check if model is requesting document blocks."""
-        blocks = self._parse_block_requests(text)
-        return bool(blocks), blocks
-
-    def _create_image_part(self, image_path: str) -> types.Part:
-        """Create a Part object from an image file."""
-        with open(image_path, "rb") as f:
-            image_data = f.read()
-
-        mime_type = get_mime_type(image_path)
-        return types.Part.from_bytes(data=image_data, mime_type=mime_type)
-
-    def _create_file_part(self, file_path: str) -> types.Part:
-        """Create a Part object from a file."""
-        with open(file_path, "rb") as f:
-            file_data = f.read()
-
-        mime_type = get_mime_type(file_path)
-        return types.Part.from_bytes(data=file_data, mime_type=mime_type)
-
-    def _parse_image_requests(self, text: str) -> list[ImageRequest]:
-        """Parse model response for image requests."""
-        requests = []
-        for pattern in self.IMAGE_REQUEST_PATTERNS:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                filename = match.strip()
-                if filename and len(filename) < 200:  # Sanity check
-                    requests.append(ImageRequest(filename=filename))
-        return requests
-
-    def _check_for_image_requests(self, text: str) -> tuple[bool, list[ImageRequest]]:
-        """Check if model is requesting images."""
-        # Keywords indicating image request
-        request_keywords = [
-            "provide image", "show image", "send image", "upload image",
-            "need image", "need to see", "can you show", "please provide",
-            "REQUEST_IMAGE", "НУЖНО_ИЗОБРАЖЕНИЕ",
-            "нужно изображение", "нужна картинка", "покажите", "пришлите",
-            "предоставьте изображение", "загрузите изображение",
-        ]
-
-        text_lower = text.lower()
-        needs_images = any(kw.lower() in text_lower for kw in request_keywords)
-
-        if needs_images:
-            requested = self._parse_image_requests(text)
-            return True, requested
-
-        return False, []
 
     def _extract_thoughts_and_text(self, response) -> tuple[str, Optional[str]]:
         """Extract thoughts and text from model response."""
@@ -241,7 +230,16 @@ class GeminiClient:
         image_paths: Optional[list[str]] = None,
         file_paths: Optional[list[str]] = None,
     ) -> ModelResponse:
-        """Send a message to the model."""
+        """Send a message to the model.
+
+        Args:
+            text: The text message to send.
+            image_paths: Optional list of image file paths.
+            file_paths: Optional list of other file paths (PDFs, etc.).
+
+        Returns:
+            ModelResponse with the model's reply and any resource requests.
+        """
         if self.chat is None:
             self.start_new_chat()
 
@@ -252,13 +250,13 @@ class GeminiClient:
         if image_paths:
             for path in image_paths:
                 if os.path.exists(path):
-                    contents.append(self._create_image_part(path))
+                    contents.append(create_image_part(path))
 
         # Add other files
         if file_paths:
             for path in file_paths:
                 if os.path.exists(path):
-                    contents.append(self._create_file_part(path))
+                    contents.append(create_file_part(path))
 
         # Add text message
         contents.append(text)
@@ -276,31 +274,25 @@ class GeminiClient:
             images=image_paths or [],
             files=file_paths or [],
         ))
+
+        # Parse structured JSON response
+        chat_response = self._parse_structured_response(response_text)
         self.history.append(ChatMessage(
             role="model",
-            text=response_text,
+            text=chat_response.response_text,
         ))
-
-        # Check if model needs blocks (new format)
-        needs_blocks, requested_blocks = self._check_for_block_requests(response_text)
-
-        # Check if model needs more images (old format)
-        needs_images, requested_images = self._check_for_image_requests(response_text)
-
-        is_final = not needs_blocks and not needs_images
-
-        return ModelResponse(
-            text=response_text,
-            thoughts=thoughts,
-            needs_images=needs_images,
-            requested_images=requested_images,
-            needs_blocks=needs_blocks,
-            requested_blocks=requested_blocks,
-            is_final=is_final,
-        )
+        return self._convert_to_model_response(chat_response, thoughts)
 
     def send_images_only(self, image_paths: list[str], context: str = "") -> ModelResponse:
-        """Send only images (as a follow-up to model request)."""
+        """Send only images (as a follow-up to model request).
+
+        Args:
+            image_paths: List of image file paths to send.
+            context: Optional context message about the images.
+
+        Returns:
+            ModelResponse with the model's reply.
+        """
         if self.chat is None:
             self.start_new_chat()
 
@@ -308,7 +300,7 @@ class GeminiClient:
 
         for path in image_paths:
             if os.path.exists(path):
-                contents.append(self._create_image_part(path))
+                contents.append(create_image_part(path))
 
         if context:
             contents.append(context)
@@ -326,28 +318,25 @@ class GeminiClient:
             text=context or "Provided requested images",
             images=image_paths,
         ))
+
+        # Parse structured JSON response
+        chat_response = self._parse_structured_response(response_text)
         self.history.append(ChatMessage(
             role="model",
-            text=response_text,
+            text=chat_response.response_text,
         ))
-
-        # Check if model needs blocks or images
-        needs_blocks, requested_blocks = self._check_for_block_requests(response_text)
-        needs_images, requested_images = self._check_for_image_requests(response_text)
-        is_final = not needs_blocks and not needs_images
-
-        return ModelResponse(
-            text=response_text,
-            thoughts=thoughts,
-            needs_images=needs_images,
-            requested_images=requested_images,
-            needs_blocks=needs_blocks,
-            requested_blocks=requested_blocks,
-            is_final=is_final,
-        )
+        return self._convert_to_model_response(chat_response, thoughts)
 
     def send_files_only(self, file_paths: list[str], context: str = "") -> ModelResponse:
-        """Send only files (PDF, etc.) as a follow-up to model request."""
+        """Send only files (PDF, etc.) as a follow-up to model request.
+
+        Args:
+            file_paths: List of file paths to send.
+            context: Optional context message about the files.
+
+        Returns:
+            ModelResponse with the model's reply.
+        """
         if self.chat is None:
             self.start_new_chat()
 
@@ -355,7 +344,7 @@ class GeminiClient:
 
         for path in file_paths:
             if os.path.exists(path):
-                contents.append(self._create_file_part(path))
+                contents.append(create_file_part(path))
 
         if context:
             contents.append(context)
@@ -373,31 +362,11 @@ class GeminiClient:
             text=context or "Предоставлены запрошенные блоки",
             files=file_paths,
         ))
+
+        # Parse structured JSON response
+        chat_response = self._parse_structured_response(response_text)
         self.history.append(ChatMessage(
             role="model",
-            text=response_text,
+            text=chat_response.response_text,
         ))
-
-        # Check if model needs more blocks or images
-        needs_blocks, requested_blocks = self._check_for_block_requests(response_text)
-        needs_images, requested_images = self._check_for_image_requests(response_text)
-        is_final = not needs_blocks and not needs_images
-
-        return ModelResponse(
-            text=response_text,
-            thoughts=thoughts,
-            needs_images=needs_images,
-            requested_images=requested_images,
-            needs_blocks=needs_blocks,
-            requested_blocks=requested_blocks,
-            is_final=is_final,
-        )
-
-    def get_history(self) -> list[ChatMessage]:
-        """Get chat history."""
-        return self.history.copy()
-
-    def clear_history(self) -> None:
-        """Clear chat history and start fresh."""
-        self.history.clear()
-        self.chat = None
+        return self._convert_to_model_response(chat_response, thoughts)

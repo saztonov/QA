@@ -194,11 +194,6 @@ class DocumentParser:
         data = self.parse()
         return list(data.image_blocks.keys())
 
-    def get_all_text_block_ids(self) -> list[str]:
-        """Get all text block IDs."""
-        data = self.parse()
-        return list(data.text_blocks.keys())
-
     def get_image_blocks_summary(self) -> str:
         """Get a summary of all image blocks for the system prompt."""
         data = self.parse()

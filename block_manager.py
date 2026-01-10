@@ -105,21 +105,3 @@ class BlockManager:
                 desc += f": {block.short_description}"
             return desc
         return f"Блок {block_id}"
-
-    def validate_block_ids(self, block_ids: list[str]) -> tuple[list[str], list[str]]:
-        """
-        Validate block IDs against available blocks.
-
-        Returns:
-            Tuple of (valid_ids, invalid_ids)
-        """
-        valid_ids = []
-        invalid_ids = []
-
-        for block_id in block_ids:
-            if self.is_block_available(block_id):
-                valid_ids.append(block_id)
-            else:
-                invalid_ids.append(block_id)
-
-        return valid_ids, invalid_ids
