@@ -44,12 +44,12 @@ class ImageThumbnail(QLabel):
 
         self.setStyleSheet("""
             QLabel {
-                border: 1px solid #ccc;
+                border: 1px solid #3c3c3c;
                 border-radius: 4px;
-                background: #f5f5f5;
+                background: #2d2d2d;
             }
             QLabel:hover {
-                border-color: #007bff;
+                border-color: #007acc;
             }
         """)
 
@@ -90,27 +90,27 @@ class MessageBubble(QFrame):
         )
         layout.addWidget(text_label)
 
-        # Styling
+        # Styling - dark theme
         if is_user:
             self.setStyleSheet("""
                 MessageBubble {
-                    background-color: #007bff;
+                    background-color: #0d47a1;
                     border-radius: 12px;
                     margin-left: 50px;
                 }
                 QLabel {
-                    color: white;
+                    color: #e3f2fd;
                 }
             """)
         else:
             self.setStyleSheet("""
                 MessageBubble {
-                    background-color: #e9ecef;
+                    background-color: #37474f;
                     border-radius: 12px;
                     margin-right: 50px;
                 }
                 QLabel {
-                    color: #212529;
+                    color: #eceff1;
                 }
             """)
 
@@ -131,14 +131,44 @@ class ChatWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Dark theme for main widget
+        self.setStyleSheet("""
+            ChatWidget {
+                background-color: #1e1e1e;
+            }
+        """)
+
         # Chat history area
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
+        self.scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: #1e1e1e;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background-color: #2d2d2d;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #555;
+                border-radius: 6px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #666;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
 
         self.messages_container = QWidget()
+        self.messages_container.setStyleSheet("background-color: #1e1e1e;")
         self.messages_layout = QVBoxLayout(self.messages_container)
         self.messages_layout.setContentsMargins(10, 10, 10, 10)
         self.messages_layout.setSpacing(10)
@@ -147,29 +177,34 @@ class ChatWidget(QWidget):
         self.scroll_area.setWidget(self.messages_container)
         layout.addWidget(self.scroll_area, 1)
 
-        # Input area
+        # Input area - dark theme
         input_frame = QFrame()
         input_frame.setStyleSheet("""
             QFrame {
-                background-color: #f8f9fa;
-                border-top: 1px solid #dee2e6;
+                background-color: #252526;
+                border-top: 1px solid #3c3c3c;
             }
         """)
         input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(10, 10, 10, 10)
 
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Type your message...")
+        self.input_field.setPlaceholderText("Введите сообщение...")
         self.input_field.setMinimumHeight(40)
         self.input_field.setStyleSheet("""
             QLineEdit {
-                border: 1px solid #ced4da;
+                background-color: #3c3c3c;
+                border: 1px solid #555;
                 border-radius: 20px;
                 padding: 8px 16px;
                 font-size: 14px;
+                color: #e0e0e0;
             }
             QLineEdit:focus {
-                border-color: #007bff;
+                border-color: #007acc;
+            }
+            QLineEdit::placeholder {
+                color: #888;
             }
         """)
         self.input_field.returnPressed.connect(self._on_send)
@@ -180,7 +215,7 @@ class ChatWidget(QWidget):
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_button.setStyleSheet("""
             QPushButton {
-                background-color: #007bff;
+                background-color: #0d47a1;
                 color: white;
                 border: none;
                 border-radius: 20px;
@@ -188,10 +223,11 @@ class ChatWidget(QWidget):
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #0056b3;
+                background-color: #1565c0;
             }
             QPushButton:disabled {
-                background-color: #6c757d;
+                background-color: #455a64;
+                color: #90a4ae;
             }
         """)
         self.send_button.clicked.connect(self._on_send)
@@ -238,7 +274,7 @@ class ChatWidget(QWidget):
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setStyleSheet("""
             QLabel {
-                color: #6c757d;
+                color: #90a4ae;
                 font-style: italic;
                 padding: 10px;
             }
@@ -250,18 +286,18 @@ class ChatWidget(QWidget):
 
     def add_image_request_message(self, filenames: list[str]):
         """Add a message showing requested images."""
-        text = "Model requests images:\n" + "\n".join(f"  - {f}" for f in filenames)
+        text = "Модель запрашивает изображения:\n" + "\n".join(f"  - {f}" for f in filenames)
         self._remove_stretch()
 
         label = QLabel(text)
         label.setWordWrap(True)
         label.setStyleSheet("""
             QLabel {
-                background-color: #fff3cd;
-                border: 1px solid #ffc107;
+                background-color: #3e2723;
+                border: 1px solid #ff8f00;
                 border-radius: 8px;
                 padding: 10px;
-                color: #856404;
+                color: #ffcc80;
             }
         """)
         self.messages_layout.addWidget(label)

@@ -113,29 +113,45 @@ class MainWindow(QMainWindow):
         self.image_manager = ImageManager(config)
         self.current_worker: Optional[QThread] = None
 
-        # Initialize document handling
+        # Initialize document handling (not loaded at startup)
         self.document_parser: Optional[DocumentParser] = None
         self.prompt_builder: Optional[PromptBuilder] = None
         self.block_manager: Optional[BlockManager] = None
-        self._init_document_system()
+        self.loaded_document_path: Optional[str] = None
+        self.loaded_crops_dir: Optional[str] = None
 
         self._setup_ui()
         self._connect_signals()
-        self._update_document_status()
 
-    def _init_document_system(self) -> None:
-        """Initialize the document parsing and prompt system."""
-        if self.config.document_md_path.exists():
-            try:
-                self.document_parser = DocumentParser(self.config.document_md_path)
-                self.prompt_builder = PromptBuilder(self.document_parser)
-                self.block_manager = BlockManager(self.config, self.document_parser)
+    def _init_document_system(self, document_path: str, crops_dir: Optional[str] = None) -> bool:
+        """Initialize the document parsing and prompt system with given paths."""
+        from pathlib import Path
+        doc_path = Path(document_path)
 
-                # Set system prompt for the Gemini client
-                system_prompt = self.prompt_builder.build_system_prompt()
-                self.gemini_client.set_system_prompt(system_prompt)
-            except Exception as e:
-                print(f"Warning: Could not initialize document system: {e}")
+        if not doc_path.exists():
+            return False
+
+        try:
+            self.document_parser = DocumentParser(doc_path)
+            self.prompt_builder = PromptBuilder(self.document_parser)
+
+            # Update config paths for block manager
+            if crops_dir:
+                self.config.crops_dir = Path(crops_dir)
+            self.config.document_md_path = doc_path
+
+            self.block_manager = BlockManager(self.config, self.document_parser)
+
+            # Set system prompt for the Gemini client
+            system_prompt = self.prompt_builder.build_system_prompt()
+            self.gemini_client.set_system_prompt(system_prompt)
+
+            self.loaded_document_path = document_path
+            self.loaded_crops_dir = crops_dir
+            return True
+        except Exception as e:
+            print(f"Warning: Could not initialize document system: {e}")
+            return False
 
     def _setup_ui(self):
         """Setup the main UI."""
@@ -165,19 +181,94 @@ class MainWindow(QMainWindow):
 
     def _create_left_panel(self) -> QWidget:
         """Create the left panel with files and settings."""
-        panel = QFrame()
-        panel.setStyleSheet("""
-            QFrame {
-                background-color: #f8f9fa;
-                border-right: 1px solid #dee2e6;
+        # Dark theme styles
+        dark_style = """
+            QFrame#leftPanel {
+                background-color: #1e1e1e;
+                border-right: 1px solid #3c3c3c;
             }
-        """)
-        panel.setMinimumWidth(250)
+            QGroupBox {
+                background-color: #2d2d2d;
+                border: 1px solid #3c3c3c;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding-top: 10px;
+                color: #e0e0e0;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+                color: #4fc3f7;
+            }
+            QListWidget {
+                background-color: #252526;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                color: #d4d4d4;
+                padding: 4px;
+            }
+            QListWidget::item {
+                padding: 4px 8px;
+                border-radius: 3px;
+            }
+            QListWidget::item:selected {
+                background-color: #094771;
+            }
+            QListWidget::item:hover {
+                background-color: #2a2d2e;
+            }
+            QComboBox {
+                background-color: #3c3c3c;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 6px 10px;
+                color: #d4d4d4;
+                min-height: 20px;
+            }
+            QComboBox:hover {
+                border-color: #007acc;
+            }
+            QComboBox::drop-down {
+                border: none;
+                padding-right: 10px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #252526;
+                border: 1px solid #3c3c3c;
+                color: #d4d4d4;
+                selection-background-color: #094771;
+            }
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #d4d4d4;
+                border: 1px solid #555;
+                padding: 8px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                border-color: #007acc;
+            }
+            QPushButton:pressed {
+                background-color: #2d2d2d;
+            }
+            QLabel {
+                color: #d4d4d4;
+            }
+        """
+
+        panel = QFrame()
+        panel.setObjectName("leftPanel")
+        panel.setStyleSheet(dark_style)
+        panel.setMinimumWidth(280)
         panel.setMaximumWidth(400)
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(15)
+        layout.setSpacing(12)
 
         # Model selection
         model_group = QGroupBox("Model")
@@ -191,12 +282,41 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(model_group)
 
+        # Documents section (document.md + crops folder)
+        docs_group = QGroupBox("Документы")
+        docs_layout = QVBoxLayout(docs_group)
+
+        self.docs_list = QListWidget()
+        self.docs_list.setMaximumHeight(120)
+        docs_layout.addWidget(self.docs_list)
+
+        # Document status
+        self.doc_status_label = QLabel("Документы не загружены")
+        self.doc_status_label.setWordWrap(True)
+        self.doc_status_label.setStyleSheet("color: #888; font-size: 11px; padding: 4px;")
+        docs_layout.addWidget(self.doc_status_label)
+
+        self.blocks_count_label = QLabel("")
+        self.blocks_count_label.setStyleSheet("color: #4caf50; font-weight: bold; padding: 2px 4px;")
+        docs_layout.addWidget(self.blocks_count_label)
+
+        docs_buttons = QHBoxLayout()
+        add_doc_btn = QPushButton("Добавить")
+        add_doc_btn.clicked.connect(self._add_document)
+        remove_doc_btn = QPushButton("Убрать")
+        remove_doc_btn.clicked.connect(self._remove_document)
+        docs_buttons.addWidget(add_doc_btn)
+        docs_buttons.addWidget(remove_doc_btn)
+        docs_layout.addLayout(docs_buttons)
+
+        layout.addWidget(docs_group)
+
         # Search directories
         dirs_group = QGroupBox("Search Directories")
         dirs_layout = QVBoxLayout(dirs_group)
 
         self.dirs_list = QListWidget()
-        self.dirs_list.setMaximumHeight(100)
+        self.dirs_list.setMaximumHeight(80)
         dirs_layout.addWidget(self.dirs_list)
 
         dirs_buttons = QHBoxLayout()
@@ -215,6 +335,7 @@ class MainWindow(QMainWindow):
         files_layout = QVBoxLayout(files_group)
 
         self.files_list = QListWidget()
+        self.files_list.setMaximumHeight(100)
         files_layout.addWidget(self.files_list)
 
         files_buttons = QHBoxLayout()
@@ -228,36 +349,25 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(files_group)
 
-        # Document status
-        doc_group = QGroupBox("Документ")
-        doc_layout = QVBoxLayout(doc_group)
-
-        self.doc_status_label = QLabel("Загрузка...")
-        self.doc_status_label.setWordWrap(True)
-        self.doc_status_label.setStyleSheet("color: #6c757d; font-size: 12px;")
-        doc_layout.addWidget(self.doc_status_label)
-
-        self.blocks_count_label = QLabel("")
-        self.blocks_count_label.setStyleSheet("color: #28a745; font-weight: bold;")
-        doc_layout.addWidget(self.blocks_count_label)
-
-        layout.addWidget(doc_group)
-
         # Actions
         actions_layout = QVBoxLayout()
 
         new_chat_btn = QPushButton("New Chat")
         new_chat_btn.setStyleSheet("""
             QPushButton {
-                background-color: #28a745;
+                background-color: #2e7d32;
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 5px;
+                padding: 12px;
+                border-radius: 6px;
                 font-weight: bold;
+                font-size: 13px;
             }
             QPushButton:hover {
-                background-color: #218838;
+                background-color: #388e3c;
+            }
+            QPushButton:pressed {
+                background-color: #1b5e20;
             }
         """)
         new_chat_btn.clicked.connect(self._new_chat)
@@ -273,15 +383,106 @@ class MainWindow(QMainWindow):
         if self.document_parser:
             try:
                 doc_data = self.document_parser.parse()
-                self.doc_status_label.setText(f"Загружен: document.md")
+                doc_name = os.path.basename(self.loaded_document_path) if self.loaded_document_path else "document.md"
+                self.doc_status_label.setText(f"Загружен: {doc_name}")
                 block_count = len(doc_data.image_blocks)
                 self.blocks_count_label.setText(f"{block_count} графических блоков")
             except Exception as e:
                 self.doc_status_label.setText(f"Ошибка: {str(e)[:50]}")
                 self.blocks_count_label.setText("")
         else:
-            self.doc_status_label.setText("Документ не найден")
+            self.doc_status_label.setText("Документы не загружены")
             self.blocks_count_label.setText("")
+
+    def _update_docs_list(self) -> None:
+        """Update the documents list in the UI."""
+        self.docs_list.clear()
+        if self.loaded_document_path:
+            self.docs_list.addItem(f"📄 {os.path.basename(self.loaded_document_path)}")
+        if self.loaded_crops_dir:
+            self.docs_list.addItem(f"📁 {os.path.basename(self.loaded_crops_dir)}/")
+
+    def _add_document(self) -> None:
+        """Add document.md file or crops folder."""
+        # Show menu to choose what to add
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2d2d2d;
+                border: 1px solid #3c3c3c;
+                color: #d4d4d4;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+                border-radius: 3px;
+            }
+            QMenu::item:selected {
+                background-color: #094771;
+            }
+        """)
+
+        add_doc_action = menu.addAction("📄 Добавить document.md")
+        add_crops_action = menu.addAction("📁 Добавить папку crops")
+
+        action = menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
+
+        if action == add_doc_action:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Выберите document.md",
+                "",
+                "Markdown Files (*.md);;All Files (*)"
+            )
+            if file_path:
+                success = self._init_document_system(file_path, self.loaded_crops_dir)
+                if success:
+                    self._update_docs_list()
+                    self._update_document_status()
+                    self.chat_widget.add_system_message(f"Загружен документ: {os.path.basename(file_path)}")
+                else:
+                    QMessageBox.warning(self, "Ошибка", "Не удалось загрузить документ")
+
+        elif action == add_crops_action:
+            directory = QFileDialog.getExistingDirectory(
+                self, "Выберите папку с кропами"
+            )
+            if directory:
+                self.loaded_crops_dir = directory
+                if self.loaded_document_path:
+                    # Reinitialize with new crops directory
+                    self._init_document_system(self.loaded_document_path, directory)
+                else:
+                    from pathlib import Path
+                    self.config.crops_dir = Path(directory)
+                self._update_docs_list()
+                self._update_document_status()
+                self.chat_widget.add_system_message(f"Загружена папка кропов: {os.path.basename(directory)}")
+
+    def _remove_document(self) -> None:
+        """Remove selected document or crops folder."""
+        current = self.docs_list.currentItem()
+        if not current:
+            return
+
+        text = current.text()
+        if text.startswith("📄"):
+            # Remove document
+            self.loaded_document_path = None
+            self.document_parser = None
+            self.prompt_builder = None
+            self.block_manager = None
+            self.gemini_client.set_system_prompt(None)
+            self.chat_widget.add_system_message("Документ удален")
+        elif text.startswith("📁"):
+            # Remove crops folder
+            self.loaded_crops_dir = None
+            self.block_manager = None
+            self.chat_widget.add_system_message("Папка кропов удалена")
+
+        self._update_docs_list()
+        self._update_document_status()
 
     def _connect_signals(self):
         """Connect signals."""

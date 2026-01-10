@@ -81,7 +81,7 @@ class GeminiClient:
         self.history: list[ChatMessage] = []
         self.system_prompt: Optional[str] = None
 
-    def set_system_prompt(self, prompt: str) -> None:
+    def set_system_prompt(self, prompt: Optional[str]) -> None:
         """Set the system prompt for the chat."""
         self.system_prompt = prompt
         self.chat = None  # Reset chat to apply new system prompt

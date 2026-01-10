@@ -23,8 +23,8 @@ class Config:
     """Application configuration."""
 
     api_key: str
-    default_model: str = "gemini-2.0-flash"
-    available_models: tuple = ("gemini-2.0-flash", "gemini-2.5-pro-preview-05-06")
+    default_model: str = "gemini-3-flash-preview"
+    available_models: tuple = ("gemini-3-flash-preview", "gemini-3-pro-preview")
 
     # Supported image extensions
     image_extensions: tuple = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
