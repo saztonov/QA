@@ -2,13 +2,16 @@
 
 import os
 import re
-from typing import Optional, Callable
+from typing import Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 from google import genai
 from google.genai import types
 
 from config import Config, get_mime_type
+
+if TYPE_CHECKING:
+    from model_settings_widget import GenerationConfig
 
 
 @dataclass
@@ -80,6 +83,12 @@ class GeminiClient:
         self.current_model = config.default_model
         self.history: list[ChatMessage] = []
         self.system_prompt: Optional[str] = None
+        self.generation_config: Optional["GenerationConfig"] = None
+
+    def set_generation_config(self, gen_config: Optional["GenerationConfig"]) -> None:
+        """Set the generation configuration."""
+        self.generation_config = gen_config
+        self.chat = None  # Reset chat to apply new config
 
     def set_system_prompt(self, prompt: Optional[str]) -> None:
         """Set the system prompt for the chat."""
@@ -95,10 +104,33 @@ class GeminiClient:
     def start_new_chat(self) -> None:
         """Start a new chat session."""
         config_dict = {"model": self.current_model}
+
+        # Build GenerateContentConfig with all settings
+        gen_config_kwargs = {}
+
         if self.system_prompt:
-            config_dict["config"] = types.GenerateContentConfig(
-                system_instruction=self.system_prompt
-            )
+            gen_config_kwargs["system_instruction"] = self.system_prompt
+
+        if self.generation_config:
+            gen_config_kwargs["temperature"] = self.generation_config.temperature
+            gen_config_kwargs["top_p"] = self.generation_config.top_p
+            gen_config_kwargs["top_k"] = self.generation_config.top_k
+            gen_config_kwargs["max_output_tokens"] = self.generation_config.max_output_tokens
+            gen_config_kwargs["candidate_count"] = self.generation_config.candidate_count
+
+            # Add penalties if non-zero
+            if self.generation_config.presence_penalty != 0.0:
+                gen_config_kwargs["presence_penalty"] = self.generation_config.presence_penalty
+            if self.generation_config.frequency_penalty != 0.0:
+                gen_config_kwargs["frequency_penalty"] = self.generation_config.frequency_penalty
+
+            # Set media resolution
+            if self.generation_config.media_resolution:
+                gen_config_kwargs["media_resolution"] = self.generation_config.media_resolution
+
+        if gen_config_kwargs:
+            config_dict["config"] = types.GenerateContentConfig(**gen_config_kwargs)
+
         self.chat = self.client.chats.create(**config_dict)
         self.history.clear()
 

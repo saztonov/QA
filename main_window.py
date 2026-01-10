@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGroupBox,
     QApplication,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 
@@ -30,6 +31,7 @@ from document_parser import DocumentParser
 from prompt_builder import PromptBuilder
 from block_manager import BlockManager
 from api_log_widget import ApiLogWidget
+from model_settings_widget import ModelSettingsWidget, GenerationConfig
 
 
 class WorkerSignals(QObject):
@@ -267,12 +269,46 @@ class MainWindow(QMainWindow):
             }
         """
 
-        panel = QFrame()
-        panel.setObjectName("leftPanel")
-        panel.setStyleSheet(dark_style)
-        panel.setMinimumWidth(280)
-        panel.setMaximumWidth(400)
+        # Main container
+        container = QFrame()
+        container.setObjectName("leftPanel")
+        container.setStyleSheet(dark_style)
+        container.setMinimumWidth(300)
+        container.setMaximumWidth(420)
 
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        # Scroll area for content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: #1e1e1e;
+            }
+            QScrollBar:vertical {
+                background-color: #2d2d2d;
+                width: 10px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #555;
+                border-radius: 5px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #666;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        panel = QWidget()
+        panel.setStyleSheet("background-color: #1e1e1e;")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(12)
@@ -288,6 +324,11 @@ class MainWindow(QMainWindow):
         model_layout.addWidget(self.model_combo)
 
         layout.addWidget(model_group)
+
+        # Model settings
+        self.model_settings_widget = ModelSettingsWidget()
+        self.model_settings_widget.settings_changed.connect(self._on_settings_changed)
+        layout.addWidget(self.model_settings_widget)
 
         # Documents section (document.md + crops folder)
         docs_group = QGroupBox("Документы")
@@ -383,7 +424,11 @@ class MainWindow(QMainWindow):
         layout.addLayout(actions_layout)
         layout.addStretch()
 
-        return panel
+        # Setup scroll area
+        scroll.setWidget(panel)
+        container_layout.addWidget(scroll)
+
+        return container
 
     def _update_document_status(self) -> None:
         """Update the document status in the UI."""
@@ -508,6 +553,20 @@ class MainWindow(QMainWindow):
         self.gemini_client.set_model(model)
         self.chat_widget.add_system_message(f"Model changed to: {model}")
         self.api_log_widget.log_model_change(model)
+
+    def _on_settings_changed(self, config: GenerationConfig):
+        """Handle generation settings change."""
+        self.gemini_client.set_generation_config(config)
+        # Log settings change
+        self.api_log_widget.add_log_entry("SETTINGS_CHANGE", {
+            "temperature": config.temperature,
+            "top_p": config.top_p,
+            "top_k": config.top_k,
+            "max_output_tokens": config.max_output_tokens,
+            "media_resolution": config.media_resolution,
+            "presence_penalty": config.presence_penalty,
+            "frequency_penalty": config.frequency_penalty,
+        })
 
     def _add_search_directory(self):
         """Add a search directory."""
