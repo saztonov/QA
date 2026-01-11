@@ -99,7 +99,7 @@ class ProcessEventWidget(QFrame):
 
     def __init__(self, event: ProcessEvent, parent=None):
         super().__init__(parent)
-        self.event = event
+        self._event_data = event  # Use _event_data to avoid shadowing QFrame.event()
         self._is_expanded = False
         self._setup_ui()
 
@@ -109,12 +109,12 @@ class ProcessEventWidget(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         # Get color for this event type
-        color = EVENT_COLORS.get(self.event.event_type, "#555")
+        color = EVENT_COLORS.get(self._event_data.event_type, "#555")
         status_color = {
             "in_progress": "#FFC107",  # Amber
             "completed": "#4CAF50",    # Green
             "error": "#F44336",        # Red
-        }.get(self.event.status, "#888")
+        }.get(self._event_data.status, "#888")
 
         self.setStyleSheet(f"""
             ProcessEventWidget {{
@@ -138,14 +138,14 @@ class ProcessEventWidget(QFrame):
         header.setSpacing(6)
 
         # Timestamp
-        time_str = self.event.timestamp.strftime("%H:%M:%S")
+        time_str = self._event_data.timestamp.strftime("%H:%M:%S")
         time_label = QLabel(time_str)
         time_label.setStyleSheet("color: #888; font-size: 10px;")
         time_label.setFixedWidth(55)
         header.addWidget(time_label)
 
         # Event type badge
-        type_label = EVENT_LABELS.get(self.event.event_type, str(self.event.event_type.value))
+        type_label = EVENT_LABELS.get(self._event_data.event_type, str(self._event_data.event_type.value))
         badge = QLabel(type_label)
         badge.setStyleSheet(f"""
             QLabel {{
@@ -160,9 +160,9 @@ class ProcessEventWidget(QFrame):
         header.addWidget(badge)
 
         # Model badge (if applicable)
-        if self.event.model:
-            model_color = "#2196F3" if self.event.model == "Flash" else "#9C27B0"
-            model_badge = QLabel(self.event.model)
+        if self._event_data.model:
+            model_color = "#2196F3" if self._event_data.model == "Flash" else "#9C27B0"
+            model_badge = QLabel(self._event_data.model)
             model_badge.setStyleSheet(f"""
                 QLabel {{
                     background-color: {model_color};
@@ -178,8 +178,8 @@ class ProcessEventWidget(QFrame):
         header.addStretch()
 
         # Duration (if available)
-        if self.event.duration_ms > 0:
-            duration_str = self._format_duration(self.event.duration_ms)
+        if self._event_data.duration_ms > 0:
+            duration_str = self._format_duration(self._event_data.duration_ms)
             duration_label = QLabel(duration_str)
             duration_label.setStyleSheet("color: #aaa; font-size: 10px;")
             header.addWidget(duration_label)
@@ -187,28 +187,28 @@ class ProcessEventWidget(QFrame):
         layout.addLayout(header)
 
         # Title
-        title_label = QLabel(self.event.title)
+        title_label = QLabel(self._event_data.title)
         title_label.setStyleSheet("color: #e0e0e0; font-size: 11px;")
         title_label.setWordWrap(True)
         layout.addWidget(title_label)
 
         # Details row (tokens, files)
-        if self.event.input_tokens > 0 or self.event.output_tokens > 0 or self.event.files_sent:
+        if self._event_data.input_tokens > 0 or self._event_data.output_tokens > 0 or self._event_data.files_sent:
             details_layout = QHBoxLayout()
             details_layout.setSpacing(12)
 
             # Tokens
-            if self.event.input_tokens > 0 or self.event.output_tokens > 0:
-                tokens_text = f"in:{self.event.input_tokens:,}"
-                if self.event.output_tokens > 0:
-                    tokens_text += f" out:{self.event.output_tokens:,}"
+            if self._event_data.input_tokens > 0 or self._event_data.output_tokens > 0:
+                tokens_text = f"in:{self._event_data.input_tokens:,}"
+                if self._event_data.output_tokens > 0:
+                    tokens_text += f" out:{self._event_data.output_tokens:,}"
                 tokens_label = QLabel(tokens_text)
                 tokens_label.setStyleSheet("color: #4fc3f7; font-size: 10px;")
                 details_layout.addWidget(tokens_label)
 
             # Files
-            if self.event.files_sent:
-                files_text = f"{len(self.event.files_sent)} file(s)"
+            if self._event_data.files_sent:
+                files_text = f"{len(self._event_data.files_sent)} file(s)"
                 files_label = QLabel(files_text)
                 files_label.setStyleSheet("color: #ff9800; font-size: 10px;")
                 details_layout.addWidget(files_label)
@@ -217,15 +217,15 @@ class ProcessEventWidget(QFrame):
             layout.addLayout(details_layout)
 
         # Additional details (if any)
-        if self.event.details:
-            details_label = QLabel(self.event.details)
+        if self._event_data.details:
+            details_label = QLabel(self._event_data.details)
             details_label.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
             details_label.setWordWrap(True)
             layout.addWidget(details_label)
 
         # Error message (if error)
-        if self.event.error_message:
-            error_label = QLabel(self.event.error_message)
+        if self._event_data.error_message:
+            error_label = QLabel(self._event_data.error_message)
             error_label.setStyleSheet("color: #f44336; font-size: 10px;")
             error_label.setWordWrap(True)
             layout.addWidget(error_label)
@@ -245,45 +245,45 @@ class ProcessEventWidget(QFrame):
         expanded_layout.setSpacing(4)
 
         # Add expandable content
-        if self.event.system_prompt:
+        if self._event_data.system_prompt:
             sp_header = QLabel("System Prompt:")
             sp_header.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
             expanded_layout.addWidget(sp_header)
 
-            sp_text = QLabel(self.event.system_prompt[:500] + "..." if len(self.event.system_prompt) > 500 else self.event.system_prompt)
+            sp_text = QLabel(self._event_data.system_prompt[:500] + "..." if len(self._event_data.system_prompt) > 500 else self._event_data.system_prompt)
             sp_text.setStyleSheet("color: #aaa; font-size: 10px;")
             sp_text.setWordWrap(True)
             sp_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             expanded_layout.addWidget(sp_text)
 
-        if self.event.user_prompt:
+        if self._event_data.user_prompt:
             up_header = QLabel("User Prompt:")
             up_header.setStyleSheet("color: #81c784; font-size: 10px; font-weight: bold;")
             expanded_layout.addWidget(up_header)
 
-            up_text = QLabel(self.event.user_prompt[:500] + "..." if len(self.event.user_prompt) > 500 else self.event.user_prompt)
+            up_text = QLabel(self._event_data.user_prompt[:500] + "..." if len(self._event_data.user_prompt) > 500 else self._event_data.user_prompt)
             up_text.setStyleSheet("color: #aaa; font-size: 10px;")
             up_text.setWordWrap(True)
             up_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             expanded_layout.addWidget(up_text)
 
-        if self.event.response_raw:
+        if self._event_data.response_raw:
             resp_header = QLabel("Response:")
             resp_header.setStyleSheet("color: #ce93d8; font-size: 10px; font-weight: bold;")
             expanded_layout.addWidget(resp_header)
 
-            resp_text = QLabel(self.event.response_raw[:500] + "..." if len(self.event.response_raw) > 500 else self.event.response_raw)
+            resp_text = QLabel(self._event_data.response_raw[:500] + "..." if len(self._event_data.response_raw) > 500 else self._event_data.response_raw)
             resp_text.setStyleSheet("color: #aaa; font-size: 10px;")
             resp_text.setWordWrap(True)
             resp_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             expanded_layout.addWidget(resp_text)
 
-        if self.event.files_sent:
+        if self._event_data.files_sent:
             files_header = QLabel("Files Sent:")
             files_header.setStyleSheet("color: #ff9800; font-size: 10px; font-weight: bold;")
             expanded_layout.addWidget(files_header)
 
-            for f in self.event.files_sent[:5]:
+            for f in self._event_data.files_sent[:5]:
                 file_label = QLabel(f"  - {os.path.basename(f)}")
                 file_label.setStyleSheet("color: #aaa; font-size: 10px;")
                 expanded_layout.addWidget(file_label)
@@ -295,13 +295,13 @@ class ProcessEventWidget(QFrame):
         self._is_expanded = not self._is_expanded
         self.expanded_frame.setVisible(self._is_expanded)
         self.expanded.emit(self._is_expanded)
-        self.clicked.emit(self.event)
+        self.clicked.emit(self._event_data)
 
     def update_event(self, **kwargs):
         """Update the event with new data."""
         for key, value in kwargs.items():
-            if hasattr(self.event, key):
-                setattr(self.event, key, value)
+            if hasattr(self._event_data, key):
+                setattr(self._event_data, key, value)
         # Rebuild UI
         # For simplicity, just update status color
         if "status" in kwargs:
@@ -309,7 +309,7 @@ class ProcessEventWidget(QFrame):
                 "in_progress": "#FFC107",
                 "completed": "#4CAF50",
                 "error": "#F44336",
-            }.get(self.event.status, "#888")
+            }.get(self._event_data.status, "#888")
             self.setStyleSheet(f"""
                 ProcessEventWidget {{
                     background-color: #2d2d2d;
