@@ -80,7 +80,7 @@ ANSWERER_SYSTEM_PROMPT = """Ты - эксперт по анализу проек
 class Answerer:
     """Generates structured answers using Gemini Pro model."""
 
-    MODEL_NAME = "gemini-3-pro-preview"  # Pro model for quality answers
+    DEFAULT_MODEL = "gemini-3-pro-preview"  # Pro model for quality answers
 
     def __init__(
         self,
@@ -105,6 +105,20 @@ class Answerer:
         self.media_resolution = media_resolution
         self.thinking_context = thinking_context or ThinkingContext()
         self.client = genai.Client(api_key=config.api_key)
+        self._model_name = self.DEFAULT_MODEL
+
+    @property
+    def MODEL_NAME(self) -> str:
+        """Get current model name (for backward compatibility)."""
+        return self._model_name
+
+    def set_model(self, model_name: str) -> None:
+        """Set the model to use for answering.
+
+        Args:
+            model_name: Name of the model (e.g., 'gemini-3-pro-preview').
+        """
+        self._model_name = model_name
 
     def set_parser(self, parser: "DocumentParser") -> None:
         """Set or update the document parser."""

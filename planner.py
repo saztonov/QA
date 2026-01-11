@@ -79,7 +79,7 @@ PLANNER_SYSTEM_PROMPT = """Ты - планировщик запросов для
 class Planner:
     """Plans query execution using Gemini Flash with structured outputs."""
 
-    MODEL_NAME = "gemini-3-flash-preview"  # Fast model for planning
+    DEFAULT_MODEL = "gemini-3-flash-preview"  # Fast model for planning
 
     def __init__(
         self,
@@ -101,6 +101,20 @@ class Planner:
         self.conversation_memory = conversation_memory
         self.block_index = block_index
         self.client = genai.Client(api_key=config.api_key)
+        self._model_name = self.DEFAULT_MODEL
+
+    @property
+    def MODEL_NAME(self) -> str:
+        """Get current model name (for backward compatibility)."""
+        return self._model_name
+
+    def set_model(self, model_name: str) -> None:
+        """Set the model to use for planning.
+
+        Args:
+            model_name: Name of the model (e.g., 'gemini-3-flash-preview').
+        """
+        self._model_name = model_name
 
     def set_parser(self, parser: "DocumentParser") -> None:
         """Set or update the document parser."""

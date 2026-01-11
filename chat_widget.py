@@ -180,6 +180,7 @@ class ChatWidget(QWidget):
 
     message_sent = Signal(str)
     roi_selected = Signal(str, float, float, float, float)  # image_path, x0, y0, x1, y1
+    citation_clicked = Signal(str, int)  # block_id, page
 
     def __init__(self):
         super().__init__()
@@ -187,6 +188,7 @@ class ChatWidget(QWidget):
         self._image_viewer: Optional[ImageViewer] = None
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
+        self._pending_roi_data: dict = None  # For user-selected ROI
         self._setup_ui()
 
     def _setup_ui(self):
@@ -265,6 +267,44 @@ class ChatWidget(QWidget):
 
         layout.addWidget(self.token_stats_frame)
 
+        # ROI indicator (shown when user has pre-selected a region)
+        self.roi_indicator_frame = QFrame()
+        self.roi_indicator_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1565c0;
+                border-top: 1px solid #1976d2;
+                padding: 4px;
+            }
+        """)
+        self.roi_indicator_frame.setVisible(False)
+        roi_indicator_layout = QHBoxLayout(self.roi_indicator_frame)
+        roi_indicator_layout.setContentsMargins(10, 4, 10, 4)
+
+        self.roi_indicator_label = QLabel("ROI: Not selected")
+        self.roi_indicator_label.setStyleSheet("color: white; font-size: 11px;")
+        roi_indicator_layout.addWidget(self.roi_indicator_label)
+
+        roi_indicator_layout.addStretch()
+
+        self.roi_clear_btn = QPushButton("Clear")
+        self.roi_clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0d47a1;
+                color: white;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #1565c0;
+            }
+        """)
+        self.roi_clear_btn.clicked.connect(self.clear_pending_roi)
+        roi_indicator_layout.addWidget(self.roi_clear_btn)
+
+        layout.addWidget(self.roi_indicator_frame)
+
         # Input area - dark theme
         input_frame = QFrame()
         input_frame.setStyleSheet("""
@@ -275,6 +315,31 @@ class ChatWidget(QWidget):
         """)
         input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(10, 10, 10, 10)
+
+        # ROI selection button
+        self.roi_btn = QPushButton("ROI")
+        self.roi_btn.setToolTip("Select a region of interest before asking a question")
+        self.roi_btn.setMinimumHeight(40)
+        self.roi_btn.setFixedWidth(50)
+        self.roi_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.roi_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #37474f;
+                color: white;
+                border: none;
+                border-radius: 20px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #455a64;
+            }
+            QPushButton:checked {
+                background-color: #1976d2;
+            }
+        """)
+        self.roi_btn.clicked.connect(self._show_roi_selector)
+        input_layout.addWidget(self.roi_btn)
 
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Введите сообщение...")
@@ -709,6 +774,10 @@ class ChatWidget(QWidget):
             }
         """)
 
+        # Store citation data for click handling
+        item_frame.setProperty("citation_data", citation)
+        item_frame.installEventFilter(self)
+
         item_layout = QHBoxLayout(item_frame)
         item_layout.setContentsMargins(8, 4, 8, 4)
         item_layout.setSpacing(8)
@@ -732,15 +801,41 @@ class ChatWidget(QWidget):
         id_label.setFixedWidth(150)
         item_layout.addWidget(id_label)
 
-        # Note
+        # Note with click hint
         note = citation.get("note", "")
         if note:
-            note_label = QLabel(note[:80] + "..." if len(note) > 80 else note)
+            display_note = note[:80] + "..." if len(note) > 80 else note
+            note_label = QLabel(display_note)
             note_label.setStyleSheet("color: #b0bec5; font-size: 11px;")
             note_label.setWordWrap(True)
             item_layout.addWidget(note_label, 1)
 
+        # Add click indicator
+        click_label = QLabel("→")
+        click_label.setStyleSheet("color: #4fc3f7; font-size: 11px;")
+        click_label.setFixedWidth(15)
+        item_layout.addWidget(click_label)
+
         return item_frame
+
+    def eventFilter(self, obj, event):
+        """Handle click events on citation items."""
+        from PySide6.QtCore import QEvent
+        if event.type() == QEvent.Type.MouseButtonPress:
+            citation = obj.property("citation_data")
+            if citation:
+                self._on_citation_item_clicked(citation)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _on_citation_item_clicked(self, citation: dict):
+        """Handle click on a citation item."""
+        block_id = citation.get("id", "")
+        page = citation.get("page", 1) or 1
+        kind = citation.get("kind", "text_block")
+
+        if block_id:
+            self.citation_clicked.emit(block_id, page)
 
     def add_followup_notice(self, iteration: int, max_iterations: int):
         """Add a notice about followup iteration."""
@@ -823,13 +918,59 @@ class ChatWidget(QWidget):
             image_path: Path to the source image.
             x0, y0, x1, y1: Normalized ROI coordinates (0.0-1.0).
         """
-        # Emit signal for main window to handle
+        # Store pending ROI data for use with next question
+        self._pending_roi_data = {
+            'image_path': image_path,
+            'bbox': (x0, y0, x1, y1)
+        }
+        self._update_roi_indicator()
+
+        # Emit signal for main window to handle (for immediate use)
         self.roi_selected.emit(image_path, x0, y0, x1, y1)
 
         # Add a system message about the ROI selection
         self.add_system_message(
-            f"Выбрана область: ({x0:.2f}, {y0:.2f}) - ({x1:.2f}, {y1:.2f})"
+            f"ROI selected: ({x0:.1%}, {y0:.1%}) - ({x1:.1%}, {y1:.1%}). "
+            f"This will be used for your next question."
         )
+
+    def _update_roi_indicator(self):
+        """Update the ROI indicator display."""
+        if self._pending_roi_data:
+            bbox = self._pending_roi_data['bbox']
+            image_name = os.path.basename(self._pending_roi_data['image_path'])[:30]
+            self.roi_indicator_label.setText(
+                f"ROI: {image_name} ({bbox[0]:.1%}, {bbox[1]:.1%}) - ({bbox[2]:.1%}, {bbox[3]:.1%})"
+            )
+            self.roi_indicator_frame.setVisible(True)
+        else:
+            self.roi_indicator_frame.setVisible(False)
+
+    def _show_roi_selector(self):
+        """Show image viewer for ROI selection."""
+        if not self._all_images:
+            self.add_system_message("No images available. Load a document first.")
+            return
+
+        # Open image viewer with first available image
+        self._open_image_viewer(self._all_images[0])
+
+        # Enable ROI selection mode
+        if self._image_viewer:
+            self._image_viewer.btn_roi.setChecked(True)
+
+    def get_pending_roi(self) -> dict:
+        """Get pending ROI data for next question.
+
+        Returns:
+            Dict with 'image_path' and 'bbox' (x0, y0, x1, y1) or None.
+        """
+        return self._pending_roi_data
+
+    def clear_pending_roi(self):
+        """Clear pending ROI selection."""
+        self._pending_roi_data = None
+        self._update_roi_indicator()
 
     def get_all_images(self) -> list[str]:
         """Get list of all tracked images.

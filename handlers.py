@@ -17,6 +17,7 @@ from schemas import (
 from answerer import Answerer
 from block_indexer import BlockIndex, load_block_index
 from process_timeline_widget import ProcessEvent, EventType, create_event_from_usage
+from app_logger import app_logger
 
 if TYPE_CHECKING:
     from gemini_client import ModelResponse
@@ -43,6 +44,11 @@ class MainWindowHandlers:
     def _on_plan_received(self, plan: Plan, raw_json: str, original_question: str, usage: dict = None):
         """Handle planning response from Flash model."""
         usage = usage or {}
+        app_logger.planning_complete(
+            plan.decision.value,
+            len(plan.requested_blocks),
+            len(plan.requested_rois)
+        )
 
         # Log the plan response with usage
         self.api_log_widget.log_plan_response(plan.model_dump(), raw_json, usage=usage)
@@ -66,6 +72,38 @@ class MainWindowHandlers:
         self.chat_widget.add_system_message(
             f"{decision_messages.get(plan.decision, 'Plan received')} - {plan.reasoning[:100]}"
         )
+
+        # Check if user pre-selected an ROI - override model's decision
+        if hasattr(self, '_pending_user_roi') and self._pending_user_roi:
+            app_logger.info("Using user-selected ROI instead of model's plan")
+            user_roi = self._pending_user_roi
+            self._pending_user_roi = None
+
+            # Extract block_id from image path (format: {block_id}_p{page}_d{dpi}...png)
+            image_name = os.path.basename(user_roi['image_path'])
+            block_id = image_name.split('_')[0] if '_' in image_name else image_name.split('.')[0]
+
+            from schemas import RequestedROI, BBoxNorm
+            roi = RequestedROI(
+                block_id=block_id,
+                page=1,
+                bbox_norm=BBoxNorm(
+                    x0=user_roi['bbox'][0],
+                    y0=user_roi['bbox'][1],
+                    x1=user_roi['bbox'][2],
+                    y1=user_roi['bbox'][3]
+                ),
+                dpi=200,
+                reason="User-selected region of interest"
+            )
+
+            self.chat_widget.add_system_message(
+                f"Using user-selected ROI: block={block_id}, "
+                f"bbox=({user_roi['bbox'][0]:.1%}, {user_roi['bbox'][1]:.1%}) - "
+                f"({user_roi['bbox'][2]:.1%}, {user_roi['bbox'][3]:.1%})"
+            )
+            self._send_rois_and_question([roi], original_question)
+            return
 
         # Process based on decision
         if plan.decision == PlanDecision.ANSWER_FROM_TEXT:
@@ -98,6 +136,7 @@ class MainWindowHandlers:
 
     def _on_plan_error(self, error: str):
         """Handle planning error - fallback to direct send."""
+        app_logger.error(f"Planning error: {error}")
         self.chat_widget.add_system_message(f"Planning error: {error}. Using direct send.")
         self.api_log_widget.log_error(f"Planning error: {error}")
 
@@ -138,6 +177,9 @@ class MainWindowHandlers:
 
         image_paths = image_paths or []
         file_paths = file_paths or []
+
+        app_logger.answering_start(question, iteration)
+        app_logger.debug(f"Evidence: images={len(image_paths)}, files={len(file_paths)}")
 
         # Store state for potential followup iterations
         self._current_question = question
@@ -270,7 +312,16 @@ class MainWindowHandlers:
         iteration: int = 1
     ):
         """Render ROIs as PNG crops and send to Pro model."""
+        app_logger.debug(f"Sending {len(rois)} ROI(s) for question")
+        for roi in rois:
+            app_logger.debug(
+                f"ROI: block={roi.block_id}, page={roi.page}, "
+                f"bbox=({roi.bbox_norm.x0:.2f},{roi.bbox_norm.y0:.2f})-"
+                f"({roi.bbox_norm.x1:.2f},{roi.bbox_norm.y1:.2f}), dpi={roi.dpi}"
+            )
+
         if not self.block_manager:
+            app_logger.warning("Block manager not initialized")
             self.chat_widget.add_system_message("Block manager not initialized.")
             self._send_to_pro_model(question)
             return
@@ -384,6 +435,7 @@ class MainWindowHandlers:
         """Handle answer from Pro model (Answerer)."""
         usage = usage or {}
         self.chat_widget.set_loading(False)
+        app_logger.answering_complete(answer.confidence, len(answer.citations))
 
         # Log the answer response with usage
         self.api_log_widget.log_answer_response(
@@ -450,6 +502,7 @@ class MainWindowHandlers:
 
     def _on_answer_error(self, error: str):
         """Handle error from Answerer."""
+        app_logger.error(f"Answer error: {error}")
         self.chat_widget.set_loading(False)
         self.chat_widget.add_system_message(f"Answer error: {error}")
         self.api_log_widget.log_error(f"Answer error: {error}")
@@ -529,6 +582,44 @@ class MainWindowHandlers:
         else:
             self.chat_widget.add_system_message("No followup blocks available.")
             self._reset_query_state()
+
+    # =========================================================================
+    # Citation Click Handler
+    # =========================================================================
+
+    def _on_citation_clicked(self, block_id: str, page: int):
+        """Handle click on a citation to open the related block image."""
+        app_logger.debug(f"Citation clicked: block={block_id}, page={page}")
+
+        if not self.block_manager:
+            self.chat_widget.add_system_message("Block manager not available.")
+            return
+
+        # Get block file
+        block_files, not_found = self.block_manager.get_block_files_for_ids([block_id])
+
+        if not block_files:
+            self.chat_widget.add_system_message(f"Block {block_id} not found.")
+            return
+
+        block_file = block_files[0]
+
+        try:
+            # Render the page to PNG
+            png_path = self.evidence_manager.render_pdf_page_to_png(
+                pdf_path=block_file.file_path,
+                block_id=block_id,
+                page=max(0, page - 1),  # Convert to 0-indexed
+                dpi=150
+            )
+
+            # Open in image viewer
+            self.chat_widget._open_image_viewer(str(png_path))
+            app_logger.debug(f"Opened citation image: {png_path}")
+
+        except Exception as e:
+            app_logger.error(f"Failed to render citation: {e}")
+            self.chat_widget.add_system_message(f"Error rendering block: {e}")
 
     # =========================================================================
     # Summarization Handlers

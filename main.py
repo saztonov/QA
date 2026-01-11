@@ -8,6 +8,8 @@ from PySide6.QtCore import Qt
 
 from config import load_config
 from main_window import MainWindow
+from app_logger import app_logger
+from theme_manager import theme_manager
 
 
 def setup_dark_palette(app: QApplication) -> None:
@@ -39,17 +41,22 @@ def setup_dark_palette(app: QApplication) -> None:
 
 def main():
     """Main entry point."""
+    app_logger.startup(version="1.0")
+
     app = QApplication(sys.argv)
     app.setApplicationName("Gemini Chat")
     app.setStyle("Fusion")
 
-    # Apply dark theme
-    setup_dark_palette(app)
+    # Apply theme (starts with dark)
+    theme_manager.apply_palette(app)
+    app_logger.debug(f"Theme applied: {theme_manager.current_theme}")
 
     # Load configuration
     try:
         config = load_config()
+        app_logger.info(f"Config loaded, API key present: {bool(config.api_key)}")
     except ValueError as e:
+        app_logger.error(f"Config error: {e}")
         QMessageBox.critical(
             None,
             "Configuration Error",
@@ -60,8 +67,11 @@ def main():
     # Create and show main window
     window = MainWindow(config)
     window.show()
+    app_logger.info("Main window displayed")
 
-    return app.exec()
+    result = app.exec()
+    app_logger.shutdown()
+    return result
 
 
 if __name__ == "__main__":

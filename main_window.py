@@ -28,6 +28,8 @@ from datetime import datetime
 
 from config import Config, load_config
 from gemini_client import GeminiClient, ModelResponse
+from app_logger import app_logger
+from theme_manager import theme_manager
 from chat_widget import ChatWidget
 from document_parser import DocumentParser
 from prompt_builder import PromptBuilder
@@ -341,15 +343,26 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(12)
 
-        # Model selection
-        model_group = QGroupBox("Model")
+        # Processing mode selection
+        model_group = QGroupBox("Processing Mode")
         model_layout = QVBoxLayout(model_group)
 
-        self.model_combo = QComboBox()
-        for model in self.config.available_models:
-            self.model_combo.addItem(model)
-        self.model_combo.currentTextChanged.connect(self._on_model_changed)
-        model_layout.addWidget(self.model_combo)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Two-Stage (Flash + Pro)", "two_stage")
+        self.mode_combo.addItem("Flash Only (Fast)", "flash_only")
+        self.mode_combo.addItem("Pro Only (Quality)", "pro_only")
+        self.mode_combo.setToolTip(
+            "Two-Stage: Flash for planning, Pro for answering (recommended)\n"
+            "Flash Only: Fast responses, lower quality\n"
+            "Pro Only: Best quality, slower"
+        )
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        model_layout.addWidget(self.mode_combo)
+
+        # Current mode indicator
+        self.mode_indicator = QLabel("Planner: Flash | Answerer: Pro")
+        self.mode_indicator.setStyleSheet("color: #888; font-size: 10px; padding: 2px;")
+        model_layout.addWidget(self.mode_indicator)
 
         layout.addWidget(model_group)
 
@@ -441,6 +454,24 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         new_chat_btn.clicked.connect(self._new_chat)
         actions_layout.addWidget(new_chat_btn)
 
+        # Theme toggle button
+        self.theme_btn = QPushButton("Light Theme")
+        self.theme_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #37474f;
+                color: white;
+                border: none;
+                padding: 8px;
+                border-radius: 6px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #455a64;
+            }
+        """)
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        actions_layout.addWidget(self.theme_btn)
+
         layout.addLayout(actions_layout)
         layout.addStretch()
 
@@ -515,11 +546,13 @@ class MainWindow(MainWindowHandlers, QMainWindow):
                     self.chat_widget.add_system_message(f"Загружен документ: {os.path.basename(file_path)}")
                     # Log document loaded
                     doc_data = self.document_parser.parse()
+                    app_logger.document_loaded(file_path, len(doc_data.image_blocks))
                     self.api_log_widget.log_document_loaded(file_path, len(doc_data.image_blocks))
                     # Log system prompt
                     if self.prompt_builder:
                         self.api_log_widget.log_system_prompt(self.prompt_builder.build_system_prompt())
                 else:
+                    app_logger.error(f"Failed to load document: {file_path}")
                     QMessageBox.warning(self, "Ошибка", "Не удалось загрузить документ")
 
         elif action == add_crops_action:
@@ -575,12 +608,86 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         """Connect signals."""
         self.chat_widget.message_sent.connect(self._on_message_sent)
         self.chat_widget.roi_selected.connect(self._on_user_roi_selected)
+        self.chat_widget.citation_clicked.connect(self._on_citation_clicked)
 
-    def _on_model_changed(self, model: str):
-        """Handle model change."""
-        self.gemini_client.set_model(model)
-        self.chat_widget.add_system_message(f"Model changed to: {model}")
-        self.api_log_widget.log_model_change(model)
+    def _on_mode_changed(self, index: int):
+        """Handle processing mode change."""
+        mode = self.mode_combo.currentData()
+
+        if mode == "flash_only":
+            planner_model = "gemini-3-flash-preview"
+            answerer_model = "gemini-3-flash-preview"
+            indicator_text = "Planner: Flash | Answerer: Flash"
+            mode_display = "Flash Only"
+        elif mode == "pro_only":
+            planner_model = "gemini-3-pro-preview"
+            answerer_model = "gemini-3-pro-preview"
+            indicator_text = "Planner: Pro | Answerer: Pro"
+            mode_display = "Pro Only"
+        else:  # two_stage (default)
+            planner_model = "gemini-3-flash-preview"
+            answerer_model = "gemini-3-pro-preview"
+            indicator_text = "Planner: Flash | Answerer: Pro"
+            mode_display = "Two-Stage"
+
+        # Update planner and answerer models
+        self.planner.set_model(planner_model)
+        self.answerer.set_model(answerer_model)
+
+        # Update indicator
+        self.mode_indicator.setText(indicator_text)
+
+        # Log and notify
+        self.chat_widget.add_system_message(f"Processing mode: {mode_display}")
+        self.api_log_widget.add_log_entry("MODE_CHANGE", {
+            "mode": mode,
+            "planner_model": planner_model,
+            "answerer_model": answerer_model,
+        })
+
+    def _toggle_theme(self):
+        """Toggle between light and dark themes."""
+        new_theme = theme_manager.toggle()
+
+        # Apply palette to application
+        app = QApplication.instance()
+        if app:
+            theme_manager.apply_palette(app)
+
+        # Update button text
+        if new_theme == 'light':
+            self.theme_btn.setText("Dark Theme")
+            self.theme_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #e0e0e0;
+                    color: #1a1a1a;
+                    border: none;
+                    padding: 8px;
+                    border-radius: 6px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #d0d0d0;
+                }
+            """)
+        else:
+            self.theme_btn.setText("Light Theme")
+            self.theme_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #37474f;
+                    color: white;
+                    border: none;
+                    padding: 8px;
+                    border-radius: 6px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #455a64;
+                }
+            """)
+
+        app_logger.info(f"Theme changed to: {new_theme}")
+        self.chat_widget.add_system_message(f"Theme: {new_theme.capitalize()}")
 
     def _on_settings_changed(self, config: GenerationConfig):
         """Handle generation settings change."""
@@ -626,6 +733,17 @@ class MainWindow(MainWindowHandlers, QMainWindow):
 
     def _on_message_sent(self, text: str):
         """Handle user message."""
+        app_logger.info(f"User message: {text[:100]}...")
+
+        # Check for pending user-selected ROI
+        pending_roi = self.chat_widget.get_pending_roi()
+        if pending_roi:
+            app_logger.roi_selected(pending_roi['image_path'], pending_roi['bbox'])
+            self._pending_user_roi = pending_roi
+            self.chat_widget.clear_pending_roi()
+        else:
+            self._pending_user_roi = None
+
         # Show user message in chat
         self.chat_widget.add_user_message(text)
 
@@ -634,6 +752,7 @@ class MainWindow(MainWindowHandlers, QMainWindow):
 
         # Use planner if document is loaded and planner is enabled
         if self.use_planner and self.document_parser:
+            app_logger.planning_start(text)
             # Get context stats for logging
             context_stats = self.planner.get_context_stats()
 

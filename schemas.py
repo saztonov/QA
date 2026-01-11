@@ -22,6 +22,14 @@ class BlockPriority(str, Enum):
     LOW = "low"  # Nice to have
 
 
+class ModelSelectionMode(str, Enum):
+    """Model selection modes for processing."""
+
+    FLASH_ONLY = "flash_only"  # Both planner and answerer use Flash (fast)
+    PRO_ONLY = "pro_only"  # Both planner and answerer use Pro (quality)
+    TWO_STAGE = "two_stage"  # Flash for planning, Pro for answering (default)
+
+
 class RequestedBlock(BaseModel):
     """A request for a specific document block."""
 
