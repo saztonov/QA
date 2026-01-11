@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QFont
 
 from image_viewer import ImageViewer
-from token_utils import count_tokens
+from token_utils import count_tokens, estimate_media_tokens
 
 
 class ImageThumbnail(QLabel):
@@ -344,11 +344,14 @@ class ChatWidget(QWidget):
         # Remove stretch before adding
         self._remove_stretch()
 
-        # Use provided tokens or estimate locally
+        # Use provided tokens or estimate locally (including media tokens)
         if input_tokens > 0:
             token_count = input_tokens
         else:
             token_count = count_tokens(text)
+            # Add estimated tokens for images
+            if images:
+                token_count += estimate_media_tokens(image_count=len(images))
         self._total_input_tokens += token_count
 
         bubble = MessageBubble(text, is_user=True, images=images, input_tokens=token_count)
@@ -461,6 +464,20 @@ class ChatWidget(QWidget):
         """Add a message showing images sent to the model."""
         self._remove_stretch()
 
+        # Count images vs PDFs for token estimation
+        image_count = 0
+        pdf_count = 0
+        for path in image_paths:
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".pdf":
+                pdf_count += 1
+            else:
+                image_count += 1
+
+        # Estimate tokens for media
+        media_tokens = estimate_media_tokens(image_count=image_count, file_count=pdf_count)
+        self._total_input_tokens += media_tokens
+
         frame = QFrame()
         frame.setStyleSheet("""
             QFrame {
@@ -475,7 +492,11 @@ class ChatWidget(QWidget):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
 
-        header = QLabel(f"Отправлено изображений: {len(image_paths)}")
+        # Header with token count
+        header_text = f"Отправлено: {len(image_paths)} файл(ов)"
+        if media_tokens > 0:
+            header_text += f" (~{media_tokens:,} токенов)"
+        header = QLabel(header_text)
         header.setStyleSheet("color: #81c784; font-weight: bold; font-size: 11px;")
         layout.addWidget(header)
 
@@ -496,6 +517,10 @@ class ChatWidget(QWidget):
                     self._all_images.append(img)
 
         self.messages_layout.addWidget(frame)
+
+        # Update token stats
+        self._update_token_stats()
+
         self.messages_layout.addStretch()
         self._scroll_to_bottom()
 
