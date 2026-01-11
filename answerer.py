@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Optional, Union, TYPE_CHECKING
 
@@ -294,7 +295,15 @@ class Answerer:
 
         Returns:
             Tuple of (Answer object, raw JSON response string, usage dict).
-            Usage dict contains: input_tokens, output_tokens, total_tokens, thoughts_tokens, thought_text
+            Usage dict contains full logging data including:
+            - input_tokens, output_tokens, total_tokens, thoughts_tokens
+            - duration_ms: execution time in milliseconds
+            - system_prompt_full: complete system prompt
+            - user_prompt_full: complete user prompt
+            - files_info: details about files sent
+            - images_info: details about images sent
+            - model: model name
+            - thought_text: extracted thinking text
         """
         image_paths = image_paths or []
         file_paths = file_paths or []
@@ -307,13 +316,29 @@ class Answerer:
 
         contents = []
 
+        # Track files info for logging
+        files_info = []
+        images_info = []
+
         for path in image_paths:
-            if os.path.exists(path):
-                contents.append(create_image_part(path))
+            str_path = str(path)
+            if os.path.exists(str_path):
+                contents.append(create_image_part(str_path))
+                images_info.append({
+                    "path": str_path,
+                    "name": os.path.basename(str_path),
+                    "size_bytes": os.path.getsize(str_path),
+                })
 
         for path in file_paths:
-            if os.path.exists(path):
-                contents.append(create_file_part(path))
+            str_path = str(path)
+            if os.path.exists(str_path):
+                contents.append(create_file_part(str_path))
+                files_info.append({
+                    "path": str_path,
+                    "name": os.path.basename(str_path),
+                    "size_bytes": os.path.getsize(str_path),
+                })
 
         user_prompt = f"Вопрос пользователя: {question}"
         if context_message:
@@ -338,15 +363,31 @@ class Answerer:
             ),
         )
 
-        # Initialize usage dict
+        # Initialize usage dict with full logging data
         usage = {
             "input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
             "thoughts_tokens": 0,
+            "duration_ms": 0.0,
+            "system_prompt_full": system_prompt,
+            "system_prompt_length": len(system_prompt),
+            "user_prompt_full": user_prompt,
+            "user_prompt_length": len(user_prompt),
+            "files_info": files_info,
+            "images_info": images_info,
+            "files_count": len(files_info),
+            "images_count": len(images_info),
+            "model": self.MODEL_NAME,
+            "media_resolution": self.media_resolution,
+            "iteration": iteration,
             "thought_text": None,
             "thought_signature": None,
+            "response_raw": None,
         }
+
+        # Start timing
+        start_time = time.time()
 
         try:
             # Execute API call directly to get full response
@@ -355,6 +396,9 @@ class Answerer:
                 contents=contents,
                 config=gen_config,
             )
+
+            # Calculate duration
+            usage["duration_ms"] = (time.time() - start_time) * 1000
 
             # Extract usage metadata
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
@@ -372,12 +416,18 @@ class Answerer:
                 usage["thought_signature"] = self.thinking_context.get_latest_signature()
 
             response_text = response.text.strip()
+            usage["response_raw"] = response_text
+
             answer_dict = json.loads(response_text)
             answer = Answer.model_validate(answer_dict)
 
             return answer, response_text, usage
 
         except Exception as e:
+            # Calculate duration even on error
+            usage["duration_ms"] = (time.time() - start_time) * 1000
+            usage["error"] = str(e)
+
             fallback_answer = Answer(
                 answer_markdown=f"Произошла ошибка: {str(e)}",
                 citations=[],
@@ -387,6 +437,7 @@ class Answerer:
                 confidence="low"
             )
             fallback_json = fallback_answer.model_dump_json(indent=2)
+            usage["response_raw"] = fallback_json
             return fallback_answer, fallback_json, usage
 
     def get_context_stats(self, image_paths: list = None, file_paths: list = None) -> dict:

@@ -1,6 +1,7 @@
 """Planner module for structured query planning using Gemini Flash."""
 
 import json
+import time
 from typing import Optional, TYPE_CHECKING
 
 from google import genai
@@ -248,7 +249,13 @@ class Planner:
 
         Returns:
             Tuple of (Plan object, raw JSON response string, usage dict).
-            Usage dict contains: input_tokens, output_tokens, total_tokens, thoughts_tokens
+            Usage dict contains full logging data including:
+            - input_tokens, output_tokens, total_tokens, thoughts_tokens
+            - duration_ms: execution time in milliseconds
+            - system_prompt_full: complete system prompt
+            - user_prompt_full: complete user prompt
+            - model: model name
+            - thought_text: extracted thinking text
         """
         system_prompt = self._build_system_prompt()
 
@@ -268,13 +275,24 @@ class Planner:
 
         user_prompt = f"Вопрос пользователя: {question}"
 
-        # Initialize usage dict
+        # Initialize usage dict with full logging data
         usage = {
             "input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
             "thoughts_tokens": 0,
+            "duration_ms": 0.0,
+            "system_prompt_full": system_prompt,
+            "system_prompt_length": len(system_prompt),
+            "user_prompt_full": user_prompt,
+            "user_prompt_length": len(user_prompt),
+            "model": self.MODEL_NAME,
+            "thought_text": None,
+            "response_raw": None,
         }
+
+        # Start timing
+        start_time = time.time()
 
         try:
             response = self.client.models.generate_content(
@@ -282,6 +300,9 @@ class Planner:
                 contents=user_prompt,
                 config=gen_config,
             )
+
+            # Calculate duration
+            usage["duration_ms"] = (time.time() - start_time) * 1000
 
             # Extract usage metadata
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
@@ -291,13 +312,31 @@ class Planner:
                 if hasattr(response.usage_metadata, 'thoughts_token_count'):
                     usage["thoughts_tokens"] = response.usage_metadata.thoughts_token_count or 0
 
+            # Extract thoughts from response
+            thoughts_parts = []
+            if hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and candidate.content:
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'thought') and part.thought:
+                                thoughts_parts.append(part.text)
+
+            if thoughts_parts:
+                usage["thought_text"] = "\n\n".join(thoughts_parts)
+
             response_text = response.text.strip()
+            usage["response_raw"] = response_text
+
             plan_dict = json.loads(response_text)
             plan = Plan.model_validate(plan_dict)
 
             return plan, response_text, usage
 
         except Exception as e:
+            # Calculate duration even on error
+            usage["duration_ms"] = (time.time() - start_time) * 1000
+            usage["error"] = str(e)
+
             fallback_plan = Plan(
                 decision=PlanDecision.ANSWER_FROM_TEXT,
                 reasoning=f"Planning failed: {str(e)}",
@@ -306,6 +345,7 @@ class Planner:
                 user_requests=[]
             )
             fallback_json = fallback_plan.model_dump_json(indent=2)
+            usage["response_raw"] = fallback_json
             return fallback_plan, fallback_json, usage
 
     def get_context_stats(self) -> dict:

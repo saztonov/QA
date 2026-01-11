@@ -523,6 +523,7 @@ class ChatWidget(QWidget):
         citations: list[dict],
         confidence: str = "medium",
         thoughts: Optional[str] = None,
+        images: Optional[list[str]] = None,
         input_tokens: int = 0,
         output_tokens: int = 0
     ):
@@ -533,6 +534,7 @@ class ChatWidget(QWidget):
             citations: List of citation dicts with keys: kind, id, page, note.
             confidence: Confidence level (high, medium, low).
             thoughts: Optional model thoughts to display.
+            images: Optional list of evidence image paths to display.
             input_tokens: Real input token count from API.
             output_tokens: Real output token count from API.
         """
@@ -560,6 +562,23 @@ class ChatWidget(QWidget):
         answer_layout = QVBoxLayout(answer_frame)
         answer_layout.setContentsMargins(10, 8, 10, 8)
         answer_layout.setSpacing(6)
+
+        # Images section (evidence images)
+        if images:
+            images_layout = QHBoxLayout()
+            images_layout.setSpacing(4)
+            for img_path in images[:5]:  # Limit to 5 thumbnails
+                if os.path.exists(img_path):
+                    thumb = ImageThumbnail(img_path, 120)
+                    thumb.clicked.connect(self._open_image_viewer)
+                    images_layout.addWidget(thumb)
+            images_layout.addStretch()
+            answer_layout.addLayout(images_layout)
+
+            # Track images for navigation
+            for img in images:
+                if img not in self._all_images:
+                    self._all_images.append(img)
 
         # Answer text with Markdown rendering
         answer_label = QLabel()

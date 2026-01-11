@@ -5,6 +5,7 @@ to reduce the main file size while maintaining functionality.
 """
 
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from schemas import (
 )
 from answerer import Answerer
 from block_indexer import BlockIndex, load_block_index
+from process_timeline_widget import TimelineEvent, EventType, create_event_from_usage
 
 if TYPE_CHECKING:
     from gemini_client import ModelResponse
@@ -44,6 +46,15 @@ class MainWindowHandlers:
 
         # Log the plan response with usage
         self.api_log_widget.log_plan_response(plan.model_dump(), raw_json, usage=usage)
+
+        # Update Timeline with planning complete event
+        self.timeline_widget.update_last_event(
+            status="completed",
+            duration_ms=usage.get("duration_ms", 0),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            details=f"Decision: {plan.decision.value}",
+        )
 
         # Show plan decision in chat
         decision_messages = {
@@ -89,6 +100,13 @@ class MainWindowHandlers:
         """Handle planning error - fallback to direct send."""
         self.chat_widget.add_system_message(f"Planning error: {error}. Using direct send.")
         self.api_log_widget.log_error(f"Planning error: {error}")
+
+        # Update Timeline with error
+        self.timeline_widget.update_last_event(
+            status="error",
+            error_message=error,
+        )
+
         self.chat_widget.set_loading(False)
 
     # =========================================================================
@@ -152,6 +170,18 @@ class MainWindowHandlers:
         self.chat_widget.add_system_message(
             f"Answering (iteration {iteration}/{self.MAX_ANSWER_ITERATIONS})..."
         )
+
+        # Add Timeline event for answering start
+        files_sent = [os.path.basename(str(p)) for p in self._accumulated_file_paths]
+        images_sent = [os.path.basename(str(p)) for p in self._accumulated_evidence_paths]
+        self.timeline_widget.add_event(TimelineEvent(
+            timestamp=datetime.now(),
+            event_type=EventType.ANSWERING_START,
+            title=f"Generating answer (iteration {iteration})",
+            model="Pro",
+            status="in_progress",
+            files_sent=files_sent + images_sent,
+        ))
 
         # Send to Answerer
         self.current_worker = AnswerWorker(
@@ -363,13 +393,34 @@ class MainWindowHandlers:
             usage=usage
         )
 
+        # Update Timeline with answer complete event
+        self.timeline_widget.update_last_event(
+            status="completed",
+            duration_ms=usage.get("duration_ms", 0),
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            details=f"Confidence: {answer.confidence}, Citations: {len(answer.citations)}",
+            system_prompt=usage.get("system_prompt_full"),
+            user_prompt=usage.get("user_prompt_full"),
+            response_raw=usage.get("response_raw"),
+        )
+
         # Display answer with citations and token counts
         citations_dicts = [c.model_dump() for c in answer.citations]
+
+        # Collect all evidence images for display
+        all_evidence_images = self._accumulated_evidence_paths.copy()
+        for p in self._accumulated_file_paths:
+            str_path = str(p)
+            if str_path not in all_evidence_images:
+                all_evidence_images.append(str_path)
+
         self.chat_widget.add_answer_with_citations(
             answer_text=answer.answer_markdown,
             citations=citations_dicts,
             confidence=answer.confidence,
             thoughts=usage.get("thought_text"),
+            images=all_evidence_images if all_evidence_images else None,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0)
         )
@@ -402,6 +453,13 @@ class MainWindowHandlers:
         self.chat_widget.set_loading(False)
         self.chat_widget.add_system_message(f"Answer error: {error}")
         self.api_log_widget.log_error(f"Answer error: {error}")
+
+        # Update Timeline with error
+        self.timeline_widget.update_last_event(
+            status="error",
+            error_message=error,
+        )
+
         self._reset_query_state()
 
     def _process_followup_requests(self, answer: Answer, question: str, current_iteration: int):

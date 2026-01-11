@@ -21,8 +21,10 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QApplication,
     QScrollArea,
+    QTabWidget,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
+from datetime import datetime
 
 from config import Config, load_config
 from gemini_client import GeminiClient, ModelResponse
@@ -32,6 +34,7 @@ from prompt_builder import PromptBuilder
 from block_manager import BlockManager
 from api_log_widget import ApiLogWidget
 from model_settings_widget import ModelSettingsWidget, GenerationConfig
+from process_timeline_widget import ProcessTimelineWidget, TimelineEvent, EventType, create_event_from_usage
 from planner import Planner
 from answerer import Answerer
 from schemas import (
@@ -174,11 +177,41 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         self.chat_widget = ChatWidget()
         splitter.addWidget(self.chat_widget)
 
-        # Right panel - API log
+        # Right panel - Timeline and API log tabs
+        right_panel = QTabWidget()
+        right_panel.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background-color: #1e1e1e;
+            }
+            QTabBar::tab {
+                background-color: #2d2d2d;
+                color: #d4d4d4;
+                padding: 8px 16px;
+                border: none;
+                border-bottom: 2px solid transparent;
+            }
+            QTabBar::tab:selected {
+                background-color: #1e1e1e;
+                color: #4fc3f7;
+                border-bottom: 2px solid #4fc3f7;
+            }
+            QTabBar::tab:hover {
+                background-color: #3d3d3d;
+            }
+        """)
+        right_panel.setMinimumWidth(300)
+        right_panel.setMaximumWidth(550)
+
+        # Timeline widget (primary)
+        self.timeline_widget = ProcessTimelineWidget()
+        right_panel.addTab(self.timeline_widget, "Timeline")
+
+        # API log widget (detailed)
         self.api_log_widget = ApiLogWidget()
-        self.api_log_widget.setMinimumWidth(300)
-        self.api_log_widget.setMaximumWidth(500)
-        splitter.addWidget(self.api_log_widget)
+        right_panel.addTab(self.api_log_widget, "API Log")
+
+        splitter.addWidget(right_panel)
 
         splitter.setSizes([280, 620, 400])
         main_layout.addWidget(splitter)
@@ -574,6 +607,9 @@ class MainWindow(MainWindowHandlers, QMainWindow):
         self.chat_widget.clear_chat()
         self.api_log_widget.log_new_chat()
 
+        # Clear Timeline
+        self.timeline_widget.clear()
+
         # Clear conversation memory and thinking context
         self.conversation_memory.clear()
         self.thinking_context.clear()
@@ -608,6 +644,15 @@ class MainWindow(MainWindowHandlers, QMainWindow):
                 context_stats=context_stats,
             )
             self.chat_widget.add_system_message("Planning...")
+
+            # Add Timeline event for planning start
+            self.timeline_widget.add_event(TimelineEvent(
+                timestamp=datetime.now(),
+                event_type=EventType.PLANNING_START,
+                title="Planning query",
+                model="Flash",
+                status="in_progress",
+            ))
 
             # Run planning in background
             self.current_worker = PlanWorker(self.planner, text)
