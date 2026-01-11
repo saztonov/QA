@@ -34,7 +34,7 @@ from prompt_builder import PromptBuilder
 from block_manager import BlockManager
 from api_log_widget import ApiLogWidget
 from model_settings_widget import ModelSettingsWidget, GenerationConfig
-from process_timeline_widget import ProcessTimelineWidget, TimelineEvent, EventType, create_event_from_usage
+from process_timeline_widget import ProcessTimelineWidget, ProcessEvent, EventType, create_event_from_usage
 from planner import Planner
 from answerer import Answerer
 from schemas import (
@@ -646,7 +646,7 @@ class MainWindow(MainWindowHandlers, QMainWindow):
             self.chat_widget.add_system_message("Planning...")
 
             # Add Timeline event for planning start
-            self.timeline_widget.add_event(TimelineEvent(
+            self.timeline_widget.add_event(ProcessEvent(
                 timestamp=datetime.now(),
                 event_type=EventType.PLANNING_START,
                 title="Planning query",

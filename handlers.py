@@ -16,7 +16,7 @@ from schemas import (
 )
 from answerer import Answerer
 from block_indexer import BlockIndex, load_block_index
-from process_timeline_widget import TimelineEvent, EventType, create_event_from_usage
+from process_timeline_widget import ProcessEvent, EventType, create_event_from_usage
 
 if TYPE_CHECKING:
     from gemini_client import ModelResponse
@@ -174,7 +174,7 @@ class MainWindowHandlers:
         # Add Timeline event for answering start
         files_sent = [os.path.basename(str(p)) for p in self._accumulated_file_paths]
         images_sent = [os.path.basename(str(p)) for p in self._accumulated_evidence_paths]
-        self.timeline_widget.add_event(TimelineEvent(
+        self.timeline_widget.add_event(ProcessEvent(
             timestamp=datetime.now(),
             event_type=EventType.ANSWERING_START,
             title=f"Generating answer (iteration {iteration})",

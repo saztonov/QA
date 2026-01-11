@@ -71,7 +71,7 @@ EVENT_LABELS = {
 
 
 @dataclass
-class TimelineEvent:
+class ProcessEvent:
     """Represents a single event in the timeline."""
     timestamp: datetime
     event_type: EventType
@@ -91,13 +91,13 @@ class TimelineEvent:
     response_raw: Optional[str] = None
 
 
-class TimelineEventWidget(QFrame):
+class ProcessEventWidget(QFrame):
     """Widget representing a single event in the timeline."""
 
     expanded = Signal(bool)
-    clicked = Signal(object)  # Emits the TimelineEvent
+    clicked = Signal(object)  # Emits the ProcessEvent
 
-    def __init__(self, event: TimelineEvent, parent=None):
+    def __init__(self, event: ProcessEvent, parent=None):
         super().__init__(parent)
         self.event = event
         self._is_expanded = False
@@ -117,14 +117,14 @@ class TimelineEventWidget(QFrame):
         }.get(self.event.status, "#888")
 
         self.setStyleSheet(f"""
-            TimelineEventWidget {{
+            ProcessEventWidget {{
                 background-color: #2d2d2d;
                 border-left: 3px solid {status_color};
                 border-radius: 4px;
                 margin: 2px 4px;
                 padding: 0px;
             }}
-            TimelineEventWidget:hover {{
+            ProcessEventWidget:hover {{
                 background-color: #3d3d3d;
             }}
         """)
@@ -311,13 +311,13 @@ class TimelineEventWidget(QFrame):
                 "error": "#F44336",
             }.get(self.event.status, "#888")
             self.setStyleSheet(f"""
-                TimelineEventWidget {{
+                ProcessEventWidget {{
                     background-color: #2d2d2d;
                     border-left: 3px solid {status_color};
                     border-radius: 4px;
                     margin: 2px 4px;
                 }}
-                TimelineEventWidget:hover {{
+                ProcessEventWidget:hover {{
                     background-color: #3d3d3d;
                 }}
             """)
@@ -338,12 +338,12 @@ class TimelineEventWidget(QFrame):
 class ProcessTimelineWidget(QWidget):
     """Main widget displaying the process timeline."""
 
-    event_clicked = Signal(object)  # Emits TimelineEvent when clicked
+    event_clicked = Signal(object)  # Emits ProcessEvent when clicked
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.events: List[TimelineEvent] = []
-        self._event_widgets: List[TimelineEventWidget] = []
+        self.events: List[ProcessEvent] = []
+        self._event_widgets: List[ProcessEventWidget] = []
         self._setup_ui()
 
     def _setup_ui(self):
@@ -449,19 +449,19 @@ class ProcessTimelineWidget(QWidget):
 
         layout.addWidget(self.stats_frame)
 
-    def add_event(self, event: TimelineEvent) -> TimelineEventWidget:
+    def add_event(self, event: ProcessEvent) -> ProcessEventWidget:
         """Add a new event to the timeline.
 
         Args:
-            event: The TimelineEvent to add.
+            event: The ProcessEvent to add.
 
         Returns:
-            The created TimelineEventWidget.
+            The created ProcessEventWidget.
         """
         self.events.append(event)
 
         # Create widget
-        event_widget = TimelineEventWidget(event)
+        event_widget = ProcessEventWidget(event)
         event_widget.clicked.connect(self._on_event_clicked)
         self._event_widgets.append(event_widget)
 
@@ -531,7 +531,7 @@ class ProcessTimelineWidget(QWidget):
         scrollbar = self.scroll_area.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
-    def _on_event_clicked(self, event: TimelineEvent) -> None:
+    def _on_event_clicked(self, event: ProcessEvent) -> None:
         """Handle event widget click."""
         self.event_clicked.emit(event)
 
@@ -542,8 +542,8 @@ def create_event_from_usage(
     title: str,
     usage: dict,
     status: str = "completed"
-) -> TimelineEvent:
-    """Create a TimelineEvent from a usage dictionary.
+) -> ProcessEvent:
+    """Create a ProcessEvent from a usage dictionary.
 
     Args:
         event_type: Type of event.
@@ -552,7 +552,7 @@ def create_event_from_usage(
         status: Event status.
 
     Returns:
-        TimelineEvent instance.
+        ProcessEvent instance.
     """
     model = usage.get("model", "")
     if "flash" in model.lower():
@@ -562,7 +562,7 @@ def create_event_from_usage(
     else:
         model_short = None
 
-    return TimelineEvent(
+    return ProcessEvent(
         timestamp=datetime.now(),
         event_type=event_type,
         title=title,
