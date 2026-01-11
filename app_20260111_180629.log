@@ -1,0 +1,14 @@
+2026-01-11 18:06:29 | INFO     | info:82 | ============================================================
+2026-01-11 18:06:29 | INFO     | info:82 | Application starting - version 1.0
+2026-01-11 18:06:29 | INFO     | info:82 | Log file: logs\app_20260111_180629.log
+2026-01-11 18:06:29 | INFO     | info:82 | ============================================================
+2026-01-11 18:06:29 | DEBUG    | debug:86 | Theme applied: dark
+2026-01-11 18:06:29 | INFO     | info:82 | Config loaded, API key present: True
+2026-01-11 18:06:31 | INFO     | info:82 | Main window displayed
+2026-01-11 18:06:43 | INFO     | info:82 | Document loaded: C:/Users/svarovsky/PycharmProjects/QA/documents/document.md (26 blocks)
+2026-01-11 18:13:21 | INFO     | info:82 | User message: Посчитай сколько и каких щитов (ШПК) есть на плане -2 этажа с системами В2, В2.1/ Посмотри вниматель...
+2026-01-11 18:13:21 | DEBUG    | debug:86 | Planning: Посчитай сколько и каких щитов (ШПК) есть на плане -2 этажа с системами В2, В2.1/ Посмотри вниматель...
+2026-01-11 18:13:39 | INFO     | info:82 | Plan: NEED_BLOCKS (blocks=3, rois=0)
+2026-01-11 18:13:39 | DEBUG    | debug:86 | Answering (iter 1): Посчитай сколько и каких щитов (ШПК) есть на плане -2 этажа с системами В2, В2.1/ Посмотри вниматель...
+2026-01-11 18:13:39 | DEBUG    | debug:86 | Evidence: images=0, files=3
+2026-01-11 18:16:13 | INFO     | info:82 | Theme changed to: light

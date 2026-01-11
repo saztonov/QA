@@ -202,7 +202,7 @@ class MainWindowHandlers:
         # Log the answer request
         self.api_log_widget.log_answer_request(
             question=question,
-            model=Answerer.MODEL_NAME,
+            model=self.answerer.MODEL_NAME,
             iteration=iteration,
             images_count=len(self._accumulated_evidence_paths),
             files_count=len(self._accumulated_file_paths),
