@@ -759,7 +759,7 @@ class MainWindow(MainWindowHandlers, QMainWindow):
             # Log planning request with context stats
             self.api_log_widget.log_plan_request(
                 text,
-                model=Planner.MODEL_NAME,
+                model=self.planner.MODEL_NAME,
                 context_stats=context_stats,
             )
             self.chat_widget.add_system_message("Planning...")
