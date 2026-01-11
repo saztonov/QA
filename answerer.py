@@ -126,6 +126,72 @@ class Answerer:
         """Set or update the thinking context."""
         self.thinking_context = context
 
+    def _try_repair_json(self, text: str) -> Optional[str]:
+        """Try to repair common JSON issues.
+
+        Args:
+            text: Malformed JSON string.
+
+        Returns:
+            Repaired JSON string or None if repair failed.
+        """
+        import re
+
+        if not text:
+            return None
+
+        repaired = text
+
+        # Try to fix unterminated strings by finding the last valid JSON structure
+        # Common issue: model cuts off in the middle of a string
+        try:
+            # Find if there's an unclosed string at the end
+            # Count quotes and try to close them
+            in_string = False
+            escape_next = False
+            last_quote_pos = -1
+
+            for i, char in enumerate(repaired):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    last_quote_pos = i
+
+            # If we're still in a string, try to close it
+            if in_string and last_quote_pos >= 0:
+                # Find what we need to close
+                # Add closing quote and try to complete the structure
+                repaired = repaired + '"'
+
+                # Try to close brackets/braces
+                open_braces = repaired.count('{') - repaired.count('}')
+                open_brackets = repaired.count('[') - repaired.count(']')
+
+                # Close arrays first, then objects
+                repaired += ']' * open_brackets
+                repaired += '}' * open_braces
+
+            # If not in string but structure is incomplete
+            else:
+                open_braces = repaired.count('{') - repaired.count('}')
+                open_brackets = repaired.count('[') - repaired.count(']')
+
+                if open_braces > 0 or open_brackets > 0:
+                    repaired += ']' * open_brackets
+                    repaired += '}' * open_braces
+
+            # Verify the repair worked
+            json.loads(repaired)
+            return repaired
+
+        except (json.JSONDecodeError, Exception):
+            return None
+
     def _build_system_prompt(
         self,
         image_count: int = 0,
@@ -418,7 +484,21 @@ class Answerer:
             response_text = response.text.strip()
             usage["response_raw"] = response_text
 
-            answer_dict = json.loads(response_text)
+            # Try to parse JSON with error recovery
+            try:
+                answer_dict = json.loads(response_text)
+            except json.JSONDecodeError as json_err:
+                # Try to repair malformed JSON
+                repaired_text = self._try_repair_json(response_text)
+                if repaired_text:
+                    try:
+                        answer_dict = json.loads(repaired_text)
+                        usage["json_repaired"] = True
+                    except json.JSONDecodeError:
+                        raise json_err
+                else:
+                    raise json_err
+
             answer = Answer.model_validate(answer_dict)
 
             return answer, response_text, usage

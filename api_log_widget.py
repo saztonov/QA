@@ -93,16 +93,34 @@ class ApiLogWidget(QWidget):
     Features:
     - Auto-rotation: When log exceeds MAX_LOG_ENTRIES, oldest entries are removed
     - Rotated entries are stored in _rotated_count for statistics
+    - Auto-save: Logs are automatically saved to logs/ folder
     """
 
     MAX_LOG_ENTRIES = 1000  # Limit to prevent UI slowdown
     ROTATION_BATCH_SIZE = 100  # Number of entries to remove on rotation
+    LOGS_DIR = "logs"  # Directory for auto-saved logs
 
     def __init__(self):
         super().__init__()
         self.log_entries: list[dict] = []
         self._rotated_count = 0  # Track total rotated entries
+        self._log_file_path = None  # Current log file path
+        self._setup_logs_dir()
         self._setup_ui()
+
+    def _setup_logs_dir(self) -> None:
+        """Create logs directory and initialize log file for this session."""
+        # Create logs directory if it doesn't exist
+        if not os.path.exists(self.LOGS_DIR):
+            os.makedirs(self.LOGS_DIR)
+
+        # Create a new log file for this session
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._log_file_path = os.path.join(self.LOGS_DIR, f"api_log_{timestamp}.json")
+
+        # Initialize with empty array
+        with open(self._log_file_path, 'w', encoding='utf-8') as f:
+            f.write('[]')
 
     def _setup_ui(self):
         """Setup the UI."""
@@ -222,10 +240,11 @@ class ApiLogWidget(QWidget):
         layout.addWidget(self.stats_label)
 
     def add_log_entry(self, entry_type: str, data: dict) -> None:
-        """Add a new log entry with automatic rotation.
+        """Add a new log entry with automatic rotation and auto-save.
 
         When log exceeds MAX_LOG_ENTRIES, oldest entries are removed
         in batches of ROTATION_BATCH_SIZE to prevent frequent rotations.
+        Logs are automatically saved to the logs/ folder.
         """
         entry = {
             "timestamp": datetime.now().isoformat(),
@@ -239,6 +258,24 @@ class ApiLogWidget(QWidget):
             self._rotate_log()
 
         self._update_display()
+
+        # Auto-save to log file
+        self._auto_save()
+
+    def _auto_save(self) -> None:
+        """Auto-save log entries to the log file."""
+        if not self._log_file_path:
+            return
+
+        try:
+            with open(self._log_file_path, 'w', encoding='utf-8') as f:
+                json.dump(self.log_entries, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Failed to auto-save log: {e}")
+
+    def get_log_file_path(self) -> Optional[str]:
+        """Get the path to the current log file."""
+        return self._log_file_path
 
     def log_request(self, text: str, images: list[str] = None, files: list[str] = None, model: str = None) -> None:
         """Log an outgoing request to the model."""

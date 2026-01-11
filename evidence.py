@@ -424,12 +424,30 @@ class EvidenceManager:
         is_fallback = False
         crop_path = None
 
+        # Determine the actual page to render
+        # ROI page is 1-indexed (from model), render expects 0-indexed
+        requested_page = roi.page - 1
+
+        # Check if the PDF has enough pages - block PDFs are often single-page extracts
+        try:
+            with fitz.open(pdf_path) as doc:
+                pdf_page_count = len(doc)
+                # If PDF has fewer pages than requested, use the last page (usually page 0)
+                if requested_page >= pdf_page_count:
+                    # Block PDFs are typically single-page extracts
+                    actual_page = pdf_page_count - 1  # Use last page (0 for single-page PDF)
+                else:
+                    actual_page = requested_page
+        except Exception:
+            # If we can't check, use requested page (will fail with clear error)
+            actual_page = requested_page
+
         # First render the full page
         try:
             png_path = self.render_pdf_page_to_png(
                 pdf_path=pdf_path,
                 block_id=roi.block_id,
-                page=roi.page - 1,  # ROI page is 1-indexed, render expects 0-indexed
+                page=actual_page,
                 dpi=roi.dpi
             )
         except Exception as e:
@@ -441,7 +459,7 @@ class EvidenceManager:
                 png_path=png_path,
                 bbox_norm=roi.bbox_norm,
                 block_id=roi.block_id,
-                page=roi.page - 1,
+                page=actual_page,
                 dpi=roi.dpi
             )
         except Exception as e:
@@ -455,7 +473,7 @@ class EvidenceManager:
 
         return RenderedEvidence(
             block_id=roi.block_id,
-            page=roi.page - 1,
+            page=actual_page,
             dpi=roi.dpi,
             png_path=png_path,
             is_crop=True,
